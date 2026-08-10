@@ -85,9 +85,11 @@ export const NON_TRANSPLANTABLE_HOST_KEY_SQL = NON_TRANSPLANTABLE_DOMAINS.map(
 // Why: subsumed by the domain exclusion above for google.com — kept because it is the general
 // rule for rotation-only cookies and applies to any family added without a full exclusion.
 export function isGoogleSourceBoundCookie(name: string, domain: string): boolean {
-  if (!GOOGLE_SOURCE_BOUND_COOKIE_NAMES.has(name)) {
-    return false
-  }
+  return GOOGLE_SOURCE_BOUND_COOKIE_NAMES.has(name) && isGoogleSessionDomain(domain)
+}
+
+// Why: Google sessions are server-bound to the source browser, so any imported google.com cookie dies within ~1h (STA-3811); presence only informs the sign-in notice.
+export function isGoogleSessionDomain(domain: string): boolean {
   const normalized = normalizeCookieDomain(domain)
   return normalized === 'google.com' || normalized?.endsWith('.google.com') === true
 }

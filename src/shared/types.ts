@@ -1080,6 +1080,8 @@ export type BrowserCookieImportSummary = {
   importedCookies: number
   skippedCookies: number
   domains: string[]
+  // Why: Google binds sessions to the source browser, so imported Google cookies expire quickly (STA-3811); lets the UI suggest a direct sign-in.
+  googleCookiesPresent?: boolean
   warning?: {
     code: 'restart-fallback-unavailable'
     loadedCookies: number
