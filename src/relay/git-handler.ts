@@ -63,6 +63,10 @@ import { getPublishTargetStatus, type GitCommandRunner } from '../shared/git-pub
 import { resolveGitRemoteRebaseSource } from '../shared/git-rebase-source'
 import type { GitPushTarget } from '../shared/types'
 import {
+  preservedBranchCleanupConfigKey,
+  serializePreservedBranchCleanupProvenance
+} from '../shared/preserved-branch-cleanup-provenance'
+import {
   getEffectiveGitUpstreamStatus,
   resolveEffectiveGitUpstream
 } from '../shared/git-effective-upstream'
@@ -259,6 +263,9 @@ export class GitHandler {
       this.refreshLocalBaseRefForWorktreeCreate(p)
     )
     this.dispatcher.onRequest('git.renameCurrentBranch', (p) => this.renameCurrentBranch(p))
+    this.dispatcher.onRequest('git.rememberPreservedBranchCleanupProvenance', (p) =>
+      this.rememberPreservedBranchCleanupProvenance(p)
+    )
     this.dispatcher.onRequest('git.forceDeletePreservedBranch', (p) =>
       this.forceDeletePreservedBranch(p)
     )
@@ -1352,6 +1359,42 @@ export class GitHandler {
     return this.runWithGitReadCacheClear(() =>
       forceDeletePreservedRelayBranch(this.git.bind(this), repoPath, branchName, expectedHead)
     )
+  }
+
+  private async rememberPreservedBranchCleanupProvenance(params: Record<string, unknown>) {
+    const repoPath = params.repoPath
+    const branchName = params.branchName
+    if (
+      typeof repoPath !== 'string' ||
+      !repoPath ||
+      repoPath.includes('\0') ||
+      typeof branchName !== 'string' ||
+      !branchName ||
+      branchName.includes('\0')
+    ) {
+      throw new Error('Invalid preserved branch cleanup provenance request.')
+    }
+    await this.git(['check-ref-format', '--branch', branchName], repoPath)
+    const key = preservedBranchCleanupConfigKey(branchName)
+    if (params.clear === true) {
+      try {
+        await this.git(['config', '--local', '--unset-all', key], repoPath)
+      } catch (error) {
+        const code = (error as { code?: unknown })?.code
+        if (code !== 1 && code !== 5 && code !== '1' && code !== '5') {
+          throw error
+        }
+      }
+      return
+    }
+    if (typeof params.expectedHead !== 'string' || params.expectedHead.includes('\0')) {
+      throw new Error('Invalid preserved branch cleanup provenance request.')
+    }
+    const serialized = serializePreservedBranchCleanupProvenance(
+      params.expectedHead,
+      params.pushTarget as GitPushTarget | undefined
+    )
+    await this.git(['config', '--local', '--replace-all', key, serialized], repoPath)
   }
 
   private async isGitRepo(params: Record<string, unknown>) {

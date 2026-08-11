@@ -141,6 +141,7 @@ const removeWorktreeLinkedPathsMock = vi.hoisted(() => vi.fn())
 const findExistingWorktreeSymlinkPathsMock = vi.hoisted(() => vi.fn())
 const resolveLocalGitUsernameMock = vi.hoisted(() => vi.fn(async () => ''))
 const rememberPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const clearPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
 const resolvePreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
 const preservedBranchCleanupProvenance = new Map<
   string,
@@ -425,7 +426,9 @@ vi.mock('../git/worktree', () => ({
   forceDeleteLocalBranch: forceDeleteLocalBranchMock
 }))
 
-vi.mock('../git/preserved-branch-cleanup-provenance', () => ({
+vi.mock('../git/preserved-branch-cleanup-provenance', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  clearPreservedBranchCleanupProvenance: clearPreservedBranchCleanupProvenanceMock,
   rememberPreservedBranchCleanupProvenance: rememberPreservedBranchCleanupProvenanceMock,
   resolvePreservedBranchCleanupProvenance: resolvePreservedBranchCleanupProvenanceMock
 }))
@@ -909,6 +912,11 @@ function resetRuntimeTestMocks(): void {
         })
       }
     )
+  clearPreservedBranchCleanupProvenanceMock
+    .mockReset()
+    .mockImplementation(async (_execGit: unknown, repoPath: string, branchName: string) => {
+      preservedBranchCleanupProvenance.delete(`${repoPath}\0${branchName}`)
+    })
   resolvePreservedBranchCleanupProvenanceMock
     .mockReset()
     .mockImplementation(
@@ -1296,6 +1304,24 @@ function makeWorktreeMeta(overrides: Partial<WorktreeMeta> = {}): WorktreeMeta {
     sortOrder: 0,
     lastActivityAt: 0,
     ...overrides
+  }
+}
+
+function preservedCleanupProviderMethods() {
+  return {
+    rememberPreservedBranchCleanupProvenance: vi.fn(
+      async (repoPath: string, branchName: string, expectedHead: string, pushTarget: unknown) =>
+        rememberPreservedBranchCleanupProvenanceMock(
+          undefined,
+          repoPath,
+          branchName,
+          expectedHead,
+          pushTarget
+        )
+    ),
+    clearPreservedBranchCleanupProvenance: vi.fn(async (repoPath: string, branchName: string) =>
+      clearPreservedBranchCleanupProvenanceMock(undefined, repoPath, branchName)
+    )
   }
 }
 
@@ -6063,6 +6089,7 @@ describe('OrcaRuntimeService', () => {
       })
     }
     const gitProvider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -6133,6 +6160,7 @@ describe('OrcaRuntimeService', () => {
     }
     const remoteStore = { ...store, getRepos: () => [remoteRepo], getRepo: () => remoteRepo }
     const gitProvider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -46772,6 +46800,13 @@ describe('OrcaRuntimeService', () => {
 
   it('force-deletes a branch that was preserved by runtime worktree removal', async () => {
     const runtime = createWorktreeRemovalRuntime()
+    const preservedWorktree = {
+      ...MOCK_GIT_WORKTREES[0],
+      head: 'def456',
+      branch: 'feature/test'
+    }
+    vi.mocked(listWorktrees).mockResolvedValue([preservedWorktree])
+    vi.mocked(listWorktreesStrict).mockResolvedValue([preservedWorktree])
     vi.mocked(removeWorktree).mockResolvedValue({
       preservedBranch: { branchName: 'feature/test', head: 'def456' }
     })
@@ -46791,6 +46826,31 @@ describe('OrcaRuntimeService', () => {
     )
   })
 
+  it('normalizes a paired-runtime host alias to the runtime local repo', async () => {
+    await rememberPreservedBranchCleanupProvenanceMock(
+      undefined,
+      TEST_REPO_PATH,
+      'feature/test',
+      'def456',
+      undefined
+    )
+    const runtime = createWorktreeRemovalRuntime()
+
+    await expect(
+      runtime.forceDeletePreservedBranch(
+        TEST_WORKTREE_ID,
+        'feature/test',
+        'def456',
+        'runtime:owner-environment'
+      )
+    ).resolves.toEqual({ deleted: true })
+    expect(forceDeleteLocalBranchMock).toHaveBeenCalledWith(
+      TEST_REPO_PATH,
+      'feature/test',
+      'def456'
+    )
+  })
+
   it('reclaims completed runtime reviews while retaining pending force-delete authority', async () => {
     const runtime = createWorktreeRemovalRuntime()
     const cleanups = Array.from({ length: 8 }, (_, index) => ({
@@ -46798,22 +46858,12 @@ describe('OrcaRuntimeService', () => {
       branchName: `feature/${index}`,
       expectedHead: `head-${index}`
     }))
-    const cleanupLifecycle = runtime as unknown as {
-      rememberPreservedBranchCleanupTarget: (
-        execGit: (args: string[], cwd: string) => Promise<{ stdout: string }>,
-        repoPath: string,
-        result: { preservedBranch: { branchName: string; head: string } },
-        fallbackHead: undefined,
-        pushTarget: undefined
-      ) => Promise<void>
-    }
-
     for (const cleanup of cleanups) {
-      await cleanupLifecycle.rememberPreservedBranchCleanupTarget(
-        vi.fn(),
-        TEST_REPO_PATH,
-        { preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead } },
+      await rememberPreservedBranchCleanupProvenanceMock(
         undefined,
+        TEST_REPO_PATH,
+        cleanup.branchName,
+        cleanup.expectedHead,
         undefined
       )
     }
@@ -46873,6 +46923,7 @@ describe('OrcaRuntimeService', () => {
       }
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
       forceDeletePreservedBranch: vi.fn().mockResolvedValue(undefined),
       listWorktrees: vi.fn().mockResolvedValue([
@@ -46984,6 +47035,13 @@ describe('OrcaRuntimeService', () => {
       })
     }
     const runtime = createWorktreeRemovalRuntime(runtimeStore)
+    const preservedWorktree = {
+      ...MOCK_GIT_WORKTREES[0],
+      head: 'def456',
+      branch: 'feature/test'
+    }
+    vi.mocked(listWorktrees).mockResolvedValue([preservedWorktree])
+    vi.mocked(listWorktreesStrict).mockResolvedValue([preservedWorktree])
     vi.mocked(removeWorktree).mockResolvedValue({
       preservedBranch: { branchName: 'feature/test', head: 'def456' }
     })
@@ -47006,6 +47064,13 @@ describe('OrcaRuntimeService', () => {
 
   it('rejects stale preserved-branch runtime cleanup actions with an old head', async () => {
     const runtime = createWorktreeRemovalRuntime()
+    const preservedWorktree = {
+      ...MOCK_GIT_WORKTREES[0],
+      head: 'new456',
+      branch: 'feature/test'
+    }
+    vi.mocked(listWorktrees).mockResolvedValue([preservedWorktree])
+    vi.mocked(listWorktreesStrict).mockResolvedValue([preservedWorktree])
     vi.mocked(removeWorktree).mockResolvedValue({
       preservedBranch: { branchName: 'feature/test', head: 'new456' }
     })

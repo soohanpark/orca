@@ -837,6 +837,41 @@ export class SshGitProvider implements IGitProvider {
     }
   }
 
+  async rememberPreservedBranchCleanupProvenance(
+    repoPath: string,
+    branchName: string,
+    expectedHead: string,
+    pushTarget?: GitPushTarget
+  ): Promise<void> {
+    try {
+      await this.runWithDiffDedupeClear(async () => {
+        await this.mux.request('git.rememberPreservedBranchCleanupProvenance', {
+          repoPath,
+          branchName,
+          expectedHead,
+          ...(pushTarget ? { pushTarget } : {})
+        })
+      })
+    } catch (error) {
+      if (isJsonRpcMethodNotFoundError(error)) {
+        throw new Error(
+          'This SSH host is running an older Orca relay that cannot safely preserve branch cleanup authority. Reconnect to deploy the latest relay, then try again.'
+        )
+      }
+      throw error
+    }
+  }
+
+  async clearPreservedBranchCleanupProvenance(repoPath: string, branchName: string): Promise<void> {
+    await this.runWithDiffDedupeClear(async () => {
+      await this.mux.request('git.rememberPreservedBranchCleanupProvenance', {
+        repoPath,
+        branchName,
+        clear: true
+      })
+    })
+  }
+
   async exec(
     args: string[],
     cwd: string,

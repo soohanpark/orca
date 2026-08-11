@@ -75,7 +75,9 @@ import {
 } from '../git/worktree'
 import { gitExecFileAsync } from '../git/runner'
 import {
+  clearPreservedBranchCleanupProvenance,
   rememberPreservedBranchCleanupProvenance,
+  removeWithPreservedBranchCleanupProvenance,
   resolvePreservedBranchCleanupProvenance,
   type PreservedBranchCleanupGitExec
 } from '../git/preserved-branch-cleanup-provenance'
@@ -532,30 +534,6 @@ export function getPreservedBranchCleanupTargetCountForTests(): number {
 
 export function resetPreservedBranchCleanupTargetsForTests(): void {
   // Compatibility probe: the process-local registry was removed.
-}
-
-async function rememberPreservedBranchCleanupTarget(
-  execGit: PreservedBranchCleanupGitExec,
-  repoPath: string,
-  result: RemoveWorktreeResult | undefined,
-  fallbackHead: string | undefined,
-  pushTarget: GitPushTarget | undefined
-): Promise<void> {
-  if (result?.preservedBranch) {
-    const head = result.preservedBranch.head ?? fallbackHead
-    if (!head) {
-      throw new Error(
-        `Cannot safely offer force-delete for preserved branch "${result.preservedBranch.branchName}" without its saved commit.`
-      )
-    }
-    await rememberPreservedBranchCleanupProvenance(
-      execGit,
-      repoPath,
-      result.preservedBranch.branchName,
-      head,
-      pushTarget
-    )
-  }
 }
 
 function preserveBranchHeadFallback(
@@ -2609,12 +2587,30 @@ export function registerWorktreeHandlers(
               localWorktreeGitOptions
             ))
           ) {
-            const removalResult = await removeStaleLocalWorktreeRegistrationAfterFilesystemRemoval({
-              canonicalWorktreePath,
-              repoPath: repo.path,
-              localWorktreeGitOptions,
-              registeredWorktree,
-              deleteBranch
+            const execGit: PreservedBranchCleanupGitExec = (argv, cwd) =>
+              gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
+            const removalResult = await removeWithPreservedBranchCleanupProvenance({
+              branchName: deleteBranch ? registeredWorktree.branch : undefined,
+              expectedHead: registeredWorktree.head,
+              pushTarget: removedPushTarget,
+              remember: (branchName, expectedHead, pushTarget) =>
+                rememberPreservedBranchCleanupProvenance(
+                  execGit,
+                  repo.path,
+                  branchName,
+                  expectedHead,
+                  pushTarget
+                ),
+              clear: (branchName) =>
+                clearPreservedBranchCleanupProvenance(execGit, repo.path, branchName),
+              remove: () =>
+                removeStaleLocalWorktreeRegistrationAfterFilesystemRemoval({
+                  canonicalWorktreePath,
+                  repoPath: repo.path,
+                  localWorktreeGitOptions,
+                  registeredWorktree,
+                  deleteBranch
+                })
             })
             await cleanupUnusedWorktreePushTargetRemote(
               repo.path,
@@ -2622,13 +2618,6 @@ export function registerWorktreeHandlers(
               removedPushTarget,
               store,
               localWorktreeGitOptions
-            )
-            await rememberPreservedBranchCleanupTarget(
-              (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions }),
-              repo.path,
-              removalResult,
-              registeredWorktree.head,
-              removedPushTarget
             )
             runtime.clearOptimisticReconcileToken(args.worktreeId)
             removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
@@ -2685,7 +2674,7 @@ export function registerWorktreeHandlers(
               async () =>
                 runtime.acquireFileWatcherRemoval(canonicalWorktreePath, remoteConnectionId)
             )
-            let rawRemovalResult: RemoveWorktreeResult | undefined
+            let removalResult: RemoveWorktreeResult
             let removalCompleted = false
             try {
               await withWorktreeRemoveStageSpan('pty_sweep', 'remote', async () => {
@@ -2694,39 +2683,40 @@ export function registerWorktreeHandlers(
                   allowUnverifiedStop: args.allowUnverifiedPtyStop
                 })
               })
-              rawRemovalResult = await withWorktreeRemoveStageSpan(
-                'git_remove',
-                'remote',
-                async () =>
-                  Object.keys(remoteRemoveOptions).length > 0
-                    ? provider!.removeWorktree(
-                        canonicalWorktreePath,
-                        args.force,
-                        remoteRemoveOptions
-                      )
-                    : provider!.removeWorktree(canonicalWorktreePath, args.force)
-              )
+              removalResult = await removeWithPreservedBranchCleanupProvenance({
+                branchName: deleteBranch ? registeredWorktree.branch : undefined,
+                expectedHead: registeredWorktree.head,
+                pushTarget: removedPushTarget,
+                remember: (branchName, expectedHead, pushTarget) =>
+                  provider!.rememberPreservedBranchCleanupProvenance(
+                    repo.path,
+                    branchName,
+                    expectedHead,
+                    pushTarget
+                  ),
+                clear: (branchName) =>
+                  provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
+                remove: () =>
+                  withWorktreeRemoveStageSpan('git_remove', 'remote', async () =>
+                    Object.keys(remoteRemoveOptions).length > 0
+                      ? provider!.removeWorktree(
+                          canonicalWorktreePath,
+                          args.force,
+                          remoteRemoveOptions
+                        )
+                      : provider!.removeWorktree(canonicalWorktreePath, args.force)
+                  )
+              })
               removalCompleted = true
             } finally {
               await removalGate.finish(removalCompleted)
             }
-            const removalResult = preserveBranchHeadFallback(
-              rawRemovalResult,
-              registeredWorktree.head
-            )
             await cleanupUnusedWorktreePushTargetRemoteSsh(
               provider!,
               repo.path,
               args.worktreeId,
               removedPushTarget,
               store
-            )
-            await rememberPreservedBranchCleanupTarget(
-              (argv, cwd) => provider!.exec(argv, cwd),
-              repo.path,
-              removalResult,
-              registeredWorktree.head,
-              removedPushTarget
             )
             runtime.clearOptimisticReconcileToken(args.worktreeId)
             await withWorktreeRemoveStageSpan('metadata_purge', 'remote', async () => {
@@ -2787,12 +2777,45 @@ export function registerWorktreeHandlers(
             // Why: Git can still classify this as an orphan after preflight; keep strict PTY teardown before any recursive fallback deletion.
           }
 
+          const cleanupBranchName = deleteBranch
+            ? refreshedRegisteredWorktree.branch.replace(/^refs\/heads\//, '')
+            : undefined
+          const cleanupExecGit: PreservedBranchCleanupGitExec = (argv, cwd) =>
+            gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
+          const clearCleanupProvenance = async (): Promise<void> => {
+            if (!cleanupBranchName) {
+              return
+            }
+            try {
+              await clearPreservedBranchCleanupProvenance(
+                cleanupExecGit,
+                repo.path,
+                cleanupBranchName
+              )
+            } catch (error) {
+              // Why: metadata cleanup cannot turn a completed removal into a false failure.
+              console.warn(
+                `[git] Failed to clear preserved branch cleanup provenance for "${cleanupBranchName}"`,
+                error
+              )
+            }
+          }
           let removalResult: RemoveWorktreeResult | undefined
+          let retainCleanupProvenance = false
           const removalGate = await withWorktreeRemoveStageSpan('watcher_gate', 'local', async () =>
             runtime.acquireFileWatcherRemoval(canonicalWorktreePath)
           )
           let removalCompleted = false
           try {
+            if (cleanupBranchName) {
+              await rememberPreservedBranchCleanupProvenance(
+                cleanupExecGit,
+                repo.path,
+                cleanupBranchName,
+                refreshedRegisteredWorktree.head,
+                removedPushTarget
+              )
+            }
             // Why: hold the watcher/terminal gate through Git and any recursive fallback so no late spawn recreates a native handle.
             // Linked-path deletion is destructive too, so PTYs must release every handle before Windows or WSL filesystem cleanup starts.
             await withWorktreeRemoveStageSpan('pty_sweep', 'local', async () => {
@@ -2837,7 +2860,10 @@ export function registerWorktreeHandlers(
                 closeWatcher: (worktreePath) => runtime.closeFileWatchersForRemoval(worktreePath)
               })
               if (recoveredRemovalResult) {
-                removalResult = recoveredRemovalResult
+                removalResult = preserveBranchHeadFallback(
+                  recoveredRemovalResult,
+                  refreshedRegisteredWorktree.head
+                )
                 removalCompleted = true
               } else if (isOrphanedWorktreeError(error)) {
                 // If git no longer tracks this worktree, clean up the directory and metadata
@@ -2880,6 +2906,7 @@ export function registerWorktreeHandlers(
                 invalidateAuthorizedRootsCache()
                 notifyWorktreesChanged(mainWindow, repoId)
                 removalCompleted = true
+                await clearCleanupProvenance()
                 return {}
               } else {
                 throw new Error(
@@ -2887,9 +2914,18 @@ export function registerWorktreeHandlers(
                 )
               }
             }
+            retainCleanupProvenance = Boolean(removalResult?.preservedBranch)
             removalCompleted = true
+          } catch (error) {
+            if (!retainCleanupProvenance) {
+              await clearCleanupProvenance()
+            }
+            throw error
           } finally {
             await removalGate.finish(removalCompleted)
+          }
+          if (!retainCleanupProvenance) {
+            await clearCleanupProvenance()
           }
           await cleanupUnusedWorktreePushTargetRemote(
             repo.path,
@@ -2897,13 +2933,6 @@ export function registerWorktreeHandlers(
             removedPushTarget,
             store,
             localWorktreeGitOptions
-          )
-          await rememberPreservedBranchCleanupTarget(
-            (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions }),
-            repo.path,
-            removalResult,
-            refreshedRegisteredWorktree.head,
-            removedPushTarget
           )
           runtime.clearOptimisticReconcileToken(args.worktreeId)
           await withWorktreeRemoveStageSpan('metadata_purge', 'local', async () => {

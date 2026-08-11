@@ -1694,6 +1694,48 @@ describe('SshGitProvider', () => {
     })
   })
 
+  it('rememberPreservedBranchCleanupProvenance sends exact authority to the narrow RPC', async () => {
+    const pushTarget = {
+      remoteName: 'contributor',
+      branchName: 'user/fix',
+      remoteUrl: 'https://github.com/user/repo.git',
+      remoteCreated: true
+    }
+    await provider.rememberPreservedBranchCleanupProvenance(
+      '/home/user/repo',
+      'you/fix-auth',
+      'abc123',
+      pushTarget
+    )
+    expect(mux.request).toHaveBeenCalledWith('git.rememberPreservedBranchCleanupProvenance', {
+      repoPath: '/home/user/repo',
+      branchName: 'you/fix-auth',
+      expectedHead: 'abc123',
+      pushTarget
+    })
+  })
+
+  it('rememberPreservedBranchCleanupProvenance rejects an old relay before removal', async () => {
+    const methodNotFound = Object.assign(
+      new Error('Method not found: git.rememberPreservedBranchCleanupProvenance'),
+      { code: -32601 }
+    )
+    mux.request.mockRejectedValueOnce(methodNotFound)
+
+    await expect(
+      provider.rememberPreservedBranchCleanupProvenance('/home/user/repo', 'you/fix-auth', 'abc123')
+    ).rejects.toThrow('Reconnect to deploy the latest relay')
+  })
+
+  it('clearPreservedBranchCleanupProvenance uses the same narrow RPC', async () => {
+    await provider.clearPreservedBranchCleanupProvenance('/home/user/repo', 'you/fix-auth')
+    expect(mux.request).toHaveBeenCalledWith('git.rememberPreservedBranchCleanupProvenance', {
+      repoPath: '/home/user/repo',
+      branchName: 'you/fix-auth',
+      clear: true
+    })
+  })
+
   it('forceDeletePreservedBranch maps old relays to the reconnect message', async () => {
     const methodNotFound = Object.assign(
       new Error('Method not found: git.forceDeletePreservedBranch'),

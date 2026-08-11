@@ -90,6 +90,13 @@ export type IGitProvider = {
     branchName: string,
     expectedHead: string
   ): Promise<void>
+  rememberPreservedBranchCleanupProvenance?(
+    repoPath: string,
+    branchName: string,
+    expectedHead: string,
+    pushTarget?: GitPushTarget
+  ): Promise<void>
+  clearPreservedBranchCleanupProvenance?(repoPath: string, branchName: string): Promise<void>
   isGitRepo(path: string): boolean
   isGitRepoAsync(dirPath: string): Promise<{ isRepo: boolean; rootPath: string | null }>
   exec(

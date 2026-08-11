@@ -133,6 +133,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.worktreeIsClean')
     expect(methods).toContain('git.refreshLocalBaseRefForWorktreeCreate')
     expect(methods).toContain('git.renameCurrentBranch')
+    expect(methods).toContain('git.rememberPreservedBranchCleanupProvenance')
     expect(methods).toContain('git.forceDeletePreservedBranch')
     expect(methods).toContain('git.exec')
     expect(methods).toContain('git.clone')
@@ -283,6 +284,60 @@ describe('GitHandler', () => {
           newBranch: '-bad'
         })
       ).rejects.toThrow('Branch name must not start with "-"')
+    })
+  })
+
+  describe('rememberPreservedBranchCleanupProvenance', () => {
+    it('writes and clears exact branch-scoped authority through the narrow RPC', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'hello')
+      gitCommit(tmpDir, 'initial')
+      execFileSync('git', ['branch', 'feature/preserved'], { cwd: tmpDir, stdio: 'pipe' })
+      const expectedHead = execFileSync('git', ['rev-parse', 'feature/preserved'], {
+        cwd: tmpDir,
+        encoding: 'utf-8'
+      }).trim()
+
+      await dispatcher.callRequest('git.rememberPreservedBranchCleanupProvenance', {
+        repoPath: tmpDir,
+        branchName: 'feature/preserved',
+        expectedHead,
+        pushTarget: {
+          remoteName: 'contributor',
+          branchName: 'user/fix',
+          remoteUrl: 'https://github.com/user/repo.git',
+          remoteCreated: true
+        }
+      })
+
+      const stored = execFileSync(
+        'git',
+        ['config', '--local', '--get', 'branch.feature/preserved.orca-preserved-cleanup'],
+        { cwd: tmpDir, encoding: 'utf-8' }
+      ).trim()
+      expect(JSON.parse(stored)).toEqual({
+        version: 1,
+        expectedHead,
+        pushTarget: {
+          remoteName: 'contributor',
+          branchName: 'user/fix',
+          remoteUrl: 'https://github.com/user/repo.git',
+          remoteCreated: true
+        }
+      })
+
+      await dispatcher.callRequest('git.rememberPreservedBranchCleanupProvenance', {
+        repoPath: tmpDir,
+        branchName: 'feature/preserved',
+        clear: true
+      })
+      expect(() =>
+        execFileSync(
+          'git',
+          ['config', '--local', '--get', 'branch.feature/preserved.orca-preserved-cleanup'],
+          { cwd: tmpDir, encoding: 'utf-8' }
+        )
+      ).toThrow()
     })
   })
 

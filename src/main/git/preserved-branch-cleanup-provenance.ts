@@ -1,31 +1,14 @@
-import type { GitPushTarget } from '../../shared/types'
+import type { GitPushTarget, RemoveWorktreeResult } from '../../shared/types'
+import {
+  parsePreservedBranchCleanupProvenance,
+  preservedBranchCleanupConfigKey,
+  serializePreservedBranchCleanupProvenance
+} from '../../shared/preserved-branch-cleanup-provenance'
 
 export type PreservedBranchCleanupGitExec = (
   args: string[],
   cwd: string
 ) => Promise<{ stdout: string; stderr: string }>
-
-function branchConfigKey(branchName: string, name: string): string {
-  return `branch.${branchName}.${name}`
-}
-
-function remoteConfigKey(remoteName: string, name: string): string {
-  return `remote.${remoteName}.${name}`
-}
-
-async function readConfig(
-  execGit: PreservedBranchCleanupGitExec,
-  repoPath: string,
-  key: string
-): Promise<string | null> {
-  try {
-    const { stdout } = await execGit(['config', '--local', '--get', key], repoPath)
-    const value = stdout.trim()
-    return value.length > 0 ? value : null
-  } catch {
-    return null
-  }
-}
 
 export async function rememberPreservedBranchCleanupProvenance(
   execGit: PreservedBranchCleanupGitExec,
@@ -39,22 +22,28 @@ export async function rememberPreservedBranchCleanupProvenance(
       'config',
       '--local',
       '--replace-all',
-      branchConfigKey(branchName, 'orca-preserved-head'),
-      expectedHead
+      preservedBranchCleanupConfigKey(branchName),
+      serializePreservedBranchCleanupProvenance(expectedHead, pushTarget)
     ],
     repoPath
   )
-  if (pushTarget?.remoteCreated && pushTarget.remoteUrl) {
+}
+
+export async function clearPreservedBranchCleanupProvenance(
+  execGit: PreservedBranchCleanupGitExec,
+  repoPath: string,
+  branchName: string
+): Promise<void> {
+  try {
     await execGit(
-      [
-        'config',
-        '--local',
-        '--replace-all',
-        remoteConfigKey(pushTarget.remoteName, 'orca-created-url'),
-        pushTarget.remoteUrl
-      ],
+      ['config', '--local', '--unset-all', preservedBranchCleanupConfigKey(branchName)],
       repoPath
     )
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code
+    if (code !== 1 && code !== 5 && code !== '1' && code !== '5') {
+      throw error
+    }
   }
 }
 
@@ -64,42 +53,72 @@ export async function resolvePreservedBranchCleanupProvenance(
   branchName: string,
   expectedHead: string
 ): Promise<GitPushTarget | undefined> {
-  const preservedHead = await readConfig(
-    execGit,
-    repoPath,
-    branchConfigKey(branchName, 'orca-preserved-head')
-  )
-  if (preservedHead !== expectedHead) {
+  try {
+    const { stdout } = await execGit(
+      ['config', '--local', '--get', preservedBranchCleanupConfigKey(branchName)],
+      repoPath
+    )
+    return parsePreservedBranchCleanupProvenance(stdout.trim(), expectedHead)
+  } catch {
     throw new Error(`No preserved branch cleanup is pending for "${branchName}".`)
   }
+}
 
-  const remoteName = await readConfig(execGit, repoPath, branchConfigKey(branchName, 'remote'))
-  const mergeRef = await readConfig(execGit, repoPath, branchConfigKey(branchName, 'merge'))
-  if (!remoteName || !mergeRef?.startsWith('refs/heads/')) {
-    return undefined
-  }
-  const targetBranchName = mergeRef.slice('refs/heads/'.length)
-  if (!targetBranchName) {
-    return undefined
-  }
+type RemoveWithPreservedBranchCleanupProvenanceOptions = {
+  branchName: string | undefined
+  expectedHead: string | undefined
+  pushTarget?: GitPushTarget
+  remember: (branchName: string, expectedHead: string, pushTarget?: GitPushTarget) => Promise<void>
+  clear: (branchName: string) => Promise<void>
+  remove: () => Promise<RemoveWorktreeResult | undefined>
+}
 
-  const createdRemoteUrl = await readConfig(
-    execGit,
-    repoPath,
-    remoteConfigKey(remoteName, 'orca-created-url')
-  )
-  let configuredRemoteUrl: string | null = null
+async function clearAfterCompletedRemoval(
+  clear: (branchName: string) => Promise<void>,
+  branchName: string
+): Promise<void> {
   try {
-    configuredRemoteUrl = (await execGit(['remote', 'get-url', remoteName], repoPath)).stdout.trim()
-  } catch {
-    // A missing remote cannot be cleaned up, but branch deletion remains safe.
+    await clear(branchName)
+  } catch (error) {
+    // Why: cleanup metadata must not turn an already-completed worktree removal into a false failure.
+    console.warn(
+      `[git] Failed to clear preserved branch cleanup provenance for "${branchName}"`,
+      error
+    )
+  }
+}
+
+export async function removeWithPreservedBranchCleanupProvenance(
+  options: RemoveWithPreservedBranchCleanupProvenanceOptions
+): Promise<RemoveWorktreeResult> {
+  const branchName = options.branchName?.replace(/^refs\/heads\//, '')
+  if (!branchName) {
+    return (await options.remove()) ?? {}
+  }
+  if (!options.expectedHead) {
+    throw new Error(
+      `Cannot safely remove branch "${branchName}" without preserving its saved commit.`
+    )
+  }
+
+  await options.remember(branchName, options.expectedHead, options.pushTarget)
+  let result: RemoveWorktreeResult
+  try {
+    result = (await options.remove()) ?? {}
+  } catch (error) {
+    await clearAfterCompletedRemoval(options.clear, branchName)
+    throw error
+  }
+
+  if (!result.preservedBranch) {
+    await clearAfterCompletedRemoval(options.clear, branchName)
+    return result
   }
   return {
-    remoteName,
-    branchName: targetBranchName,
-    ...((createdRemoteUrl ?? configuredRemoteUrl)
-      ? { remoteUrl: createdRemoteUrl ?? configuredRemoteUrl ?? undefined }
-      : {}),
-    ...(createdRemoteUrl ? { remoteCreated: true } : {})
+    ...result,
+    preservedBranch: {
+      ...result.preservedBranch,
+      head: result.preservedBranch.head ?? options.expectedHead
+    }
   }
 }

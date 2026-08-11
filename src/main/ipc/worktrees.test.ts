@@ -13,6 +13,7 @@ const ORIGINAL_PLATFORM = process.platform
 const removeWorktreeLinkedPathsMock = vi.hoisted(() => vi.fn())
 const findExistingWorktreeSymlinkPathsMock = vi.hoisted(() => vi.fn())
 const rememberPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const clearPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
 const resolvePreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
 const preservedBranchCleanupProvenance = new Map<
   string,
@@ -142,7 +143,9 @@ vi.mock('../git/runner', () => ({
   gitExecFileSync: vi.fn()
 }))
 
-vi.mock('../git/preserved-branch-cleanup-provenance', () => ({
+vi.mock('../git/preserved-branch-cleanup-provenance', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  clearPreservedBranchCleanupProvenance: clearPreservedBranchCleanupProvenanceMock,
   rememberPreservedBranchCleanupProvenance: rememberPreservedBranchCleanupProvenanceMock,
   resolvePreservedBranchCleanupProvenance: resolvePreservedBranchCleanupProvenanceMock
 }))
@@ -373,6 +376,11 @@ describe('registerWorktreeHandlers', () => {
           })
         }
       )
+    clearPreservedBranchCleanupProvenanceMock
+      .mockReset()
+      .mockImplementation(async (_execGit: unknown, repoPath: string, branchName: string) => {
+        preservedBranchCleanupProvenance.delete(`${repoPath}\0${branchName}`)
+      })
     resolvePreservedBranchCleanupProvenanceMock
       .mockReset()
       .mockImplementation(
@@ -826,7 +834,9 @@ describe('registerWorktreeHandlers', () => {
 
   function mockKnownFeatureWorktree(
     path = '/workspace/feature-wt',
-    repoPath = '/workspace/repo'
+    repoPath = '/workspace/repo',
+    head = 'feature',
+    branch = 'feature'
   ): GitWorktreeInfo[] {
     const worktrees: GitWorktreeInfo[] = [
       {
@@ -838,14 +848,32 @@ describe('registerWorktreeHandlers', () => {
       },
       {
         path,
-        head: 'feature',
-        branch: 'feature',
+        head,
+        branch,
         isBare: false,
         isMainWorktree: false
       }
     ]
     listWorktreesMock.mockResolvedValue(worktrees)
     return worktrees
+  }
+
+  function preservedCleanupProviderMethods() {
+    return {
+      rememberPreservedBranchCleanupProvenance: vi.fn(
+        async (repoPath: string, branchName: string, expectedHead: string, pushTarget: unknown) =>
+          rememberPreservedBranchCleanupProvenanceMock(
+            undefined,
+            repoPath,
+            branchName,
+            expectedHead,
+            pushTarget
+          )
+      ),
+      clearPreservedBranchCleanupProvenance: vi.fn(async (repoPath: string, branchName: string) =>
+        clearPreservedBranchCleanupProvenanceMock(undefined, repoPath, branchName)
+      )
+    }
   }
 
   function makeWorktreeMeta(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -8879,6 +8907,7 @@ describe('registerWorktreeHandlers', () => {
       callOrder.push('watchers')
     })
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9018,6 +9047,7 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9076,6 +9106,7 @@ describe('registerWorktreeHandlers', () => {
     }
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9139,6 +9170,7 @@ describe('registerWorktreeHandlers', () => {
     }
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9196,6 +9228,7 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: 'C:\\remote\\repo',
@@ -9262,6 +9295,7 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9319,6 +9353,7 @@ describe('registerWorktreeHandlers', () => {
       connectionId: 'conn-1'
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: sshRepo.path,
@@ -9362,6 +9397,7 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const provider = {
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: sshRepo.path,
@@ -9574,7 +9610,7 @@ describe('registerWorktreeHandlers', () => {
   })
 
   it('force-deletes a branch that was preserved by safe worktree removal', async () => {
-    mockKnownFeatureWorktree()
+    mockKnownFeatureWorktree('/workspace/feature-wt', '/workspace/repo', 'def456', 'feature/test')
     removeWorktreeMock.mockResolvedValue({
       preservedBranch: { branchName: 'feature/test', head: 'def456' }
     })
@@ -9605,7 +9641,12 @@ describe('registerWorktreeHandlers', () => {
     }))
 
     for (const cleanup of cleanups) {
-      mockKnownFeatureWorktree(cleanup.worktreeId.split('::')[1])
+      mockKnownFeatureWorktree(
+        cleanup.worktreeId.split('::')[1],
+        '/workspace/repo',
+        cleanup.expectedHead,
+        cleanup.branchName
+      )
       removeWorktreeMock.mockResolvedValueOnce({
         preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead }
       })
@@ -9640,7 +9681,12 @@ describe('registerWorktreeHandlers', () => {
     }))
 
     for (const cleanup of cleanups) {
-      mockKnownFeatureWorktree(cleanup.worktreeId.split('::')[1])
+      mockKnownFeatureWorktree(
+        cleanup.worktreeId.split('::')[1],
+        '/workspace/repo',
+        cleanup.expectedHead,
+        cleanup.branchName
+      )
       removeWorktreeMock.mockResolvedValueOnce({
         preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead }
       })
@@ -9672,6 +9718,7 @@ describe('registerWorktreeHandlers', () => {
     }
     const worktreeId = 'repo-ssh::/remote/feature-wt'
     const provider = {
+      ...preservedCleanupProviderMethods(),
       exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
       forceDeletePreservedBranch: vi.fn().mockResolvedValue(undefined),
       listWorktrees: vi.fn().mockResolvedValue([
@@ -9714,6 +9761,46 @@ describe('registerWorktreeHandlers', () => {
       'def456'
     )
     expect(forceDeleteLocalBranchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an old SSH relay before destructive worktree removal', async () => {
+    const repo = {
+      id: 'repo-ssh',
+      path: '/remote/repo',
+      displayName: 'ssh',
+      badgeColor: '#000',
+      addedAt: 0,
+      connectionId: 'conn-1',
+      worktreeBaseRef: null
+    }
+    const removeWorktree = vi.fn()
+    const provider = {
+      ...preservedCleanupProviderMethods(),
+      rememberPreservedBranchCleanupProvenance: vi
+        .fn()
+        .mockRejectedValue(new Error('Reconnect to deploy the latest relay, then try again.')),
+      listWorktrees: vi.fn().mockResolvedValue([
+        { path: repo.path, head: 'main', branch: 'main', isBare: false, isMainWorktree: true },
+        {
+          path: '/remote/feature-wt',
+          head: 'def456',
+          branch: 'feature/test',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ]),
+      removeWorktree,
+      worktreeIsClean: vi.fn().mockResolvedValue({ clean: true })
+    }
+    store.getRepos.mockReturnValue([repo])
+    store.getRepo.mockReturnValue(repo)
+    getSshGitProviderMock.mockReturnValue(provider)
+
+    await expect(
+      handlers['worktrees:remove'](null, { worktreeId: 'repo-ssh::/remote/feature-wt' })
+    ).rejects.toThrow('Reconnect to deploy the latest relay')
+    expect(removeWorktree).not.toHaveBeenCalled()
+    expect(store.removeWorktreeMeta).not.toHaveBeenCalled()
   })
 
   it('selects the exact host when local and SSH repos share an id', async () => {
@@ -9769,7 +9856,7 @@ describe('registerWorktreeHandlers', () => {
   })
 
   it('rejects stale preserved-branch cleanup actions with an old head', async () => {
-    mockKnownFeatureWorktree()
+    mockKnownFeatureWorktree('/workspace/feature-wt', '/workspace/repo', 'new456', 'feature/test')
     removeWorktreeMock.mockResolvedValue({
       preservedBranch: { branchName: 'feature/test', head: 'new456' }
     })
@@ -10444,6 +10531,7 @@ describe('registerWorktreeHandlers', () => {
     store.getRepos.mockReturnValue([repo])
     store.getRepo.mockReturnValue(repo)
     getSshGitProviderMock.mockReturnValue({
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         { path: '/remote/repo', head: 'main', branch: 'main', isBare: false, isMainWorktree: true },
         {
