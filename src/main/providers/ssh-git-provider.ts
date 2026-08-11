@@ -841,7 +841,8 @@ export class SshGitProvider implements IGitProvider {
     repoPath: string,
     branchName: string,
     expectedHead: string,
-    pushTarget?: GitPushTarget
+    pushTarget?: GitPushTarget,
+    worktreeId?: string
   ): Promise<void> {
     try {
       await this.runWithDiffDedupeClear(async () => {
@@ -849,8 +850,29 @@ export class SshGitProvider implements IGitProvider {
           repoPath,
           branchName,
           expectedHead,
-          ...(pushTarget ? { pushTarget } : {})
+          ...(pushTarget ? { pushTarget } : {}),
+          ...(worktreeId ? { worktreeId } : {})
         })
+      })
+    } catch (error) {
+      if (isJsonRpcMethodNotFoundError(error)) {
+        throw new Error(
+          'This SSH host is running an older Orca relay that cannot safely preserve branch cleanup authority. Reconnect to deploy the latest relay, then try again.'
+        )
+      }
+      throw error
+    }
+  }
+
+  async preflightPreservedBranchCleanupProvenance(
+    repoPath: string,
+    branchName: string
+  ): Promise<void> {
+    try {
+      await this.mux.request('git.rememberPreservedBranchCleanupProvenance', {
+        repoPath,
+        branchName,
+        preflight: true
       })
     } catch (error) {
       if (isJsonRpcMethodNotFoundError(error)) {

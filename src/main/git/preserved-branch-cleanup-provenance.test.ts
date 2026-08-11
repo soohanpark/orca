@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   clearPreservedBranchCleanupProvenance,
   rememberPreservedBranchCleanupProvenance,
+  recoverPreservedBranchCleanupProvenance,
   removeWithPreservedBranchCleanupProvenance,
   resolvePreservedBranchCleanupProvenance,
   type PreservedBranchCleanupGitExec
@@ -133,6 +134,23 @@ describe('preserved branch cleanup provenance', () => {
       ['config', '--local', '--get', preservedBranchCleanupConfigKey('feature/test')],
       '/repo'
     )
+  })
+
+  it('recovers exact authority by worktree only on the missing-path error path', async () => {
+    const { execGit, path } = await createRepo()
+    const head = (await execGit(['rev-parse', 'feature/test'], path)).stdout.trim()
+    await rememberPreservedBranchCleanupProvenance(
+      execGit,
+      path,
+      'feature/test',
+      head,
+      undefined,
+      'repo-1::/missing/wt'
+    )
+
+    await expect(
+      recoverPreservedBranchCleanupProvenance(execGit, path, 'repo-1::/missing/wt')
+    ).resolves.toEqual({ branchName: 'feature/test', expectedHead: head })
   })
 
   it('writes authority before removal and performs no removal when the write fails', async () => {

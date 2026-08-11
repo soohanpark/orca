@@ -1,9 +1,11 @@
 import type { GitPushTarget, RemoveWorktreeResult } from '../../shared/types'
 import {
+  decodePreservedBranchCleanupProvenance,
   parsePreservedBranchCleanupProvenance,
   preservedBranchCleanupConfigKey,
   serializePreservedBranchCleanupProvenance
 } from '../../shared/preserved-branch-cleanup-provenance'
+import { iterateProcessOutputLines } from '../../shared/process-output-field-scanner'
 
 export type PreservedBranchCleanupGitExec = (
   args: string[],
@@ -15,7 +17,8 @@ export async function rememberPreservedBranchCleanupProvenance(
   repoPath: string,
   branchName: string,
   expectedHead: string,
-  pushTarget?: GitPushTarget
+  pushTarget?: GitPushTarget,
+  worktreeId?: string
 ): Promise<void> {
   await execGit(
     [
@@ -23,10 +26,67 @@ export async function rememberPreservedBranchCleanupProvenance(
       '--local',
       '--replace-all',
       preservedBranchCleanupConfigKey(branchName),
-      serializePreservedBranchCleanupProvenance(expectedHead, pushTarget)
+      serializePreservedBranchCleanupProvenance(
+        expectedHead,
+        pushTarget,
+        worktreeId ? { branchName, worktreeId } : undefined
+      )
     ],
     repoPath
   )
+}
+
+export async function recoverPreservedBranchCleanupProvenance(
+  execGit: PreservedBranchCleanupGitExec,
+  repoPath: string,
+  worktreeId: string
+): Promise<{
+  branchName: string
+  expectedHead: string
+  pushTarget?: GitPushTarget
+} | null> {
+  let stdout: string
+  try {
+    ;({ stdout } = await execGit(
+      ['config', '--local', '--get-regexp', '^branch\\..*\\.orca-preserved-cleanup$'],
+      repoPath
+    ))
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code
+    if (code === 1 || code === 5 || code === '1' || code === '5') {
+      return null
+    }
+    throw error
+  }
+
+  let recovered: ReturnType<typeof decodePreservedBranchCleanupProvenance> | undefined
+  for (const line of iterateProcessOutputLines(stdout)) {
+    const separator = line.search(/\s/)
+    if (separator < 0) {
+      continue
+    }
+    let candidate: ReturnType<typeof decodePreservedBranchCleanupProvenance>
+    try {
+      candidate = decodePreservedBranchCleanupProvenance(line.slice(separator + 1).trimStart())
+    } catch {
+      continue
+    }
+    if (candidate.worktreeId !== worktreeId) {
+      continue
+    }
+    if (recovered) {
+      throw new Error(`Ambiguous preserved branch cleanup is pending for "${worktreeId}".`)
+    }
+    recovered = candidate
+  }
+  if (!recovered?.branchName) {
+    return null
+  }
+  return {
+    branchName: recovered.branchName,
+    expectedHead: recovered.expectedHead,
+    ...(recovered.pushTarget ? { pushTarget: recovered.pushTarget } : {})
+  }
 }
 
 export async function clearPreservedBranchCleanupProvenance(

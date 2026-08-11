@@ -100,6 +100,7 @@ import { endSubprocessStdin } from '../shared/subprocess-stdin-write'
 import { clearGitStatusLineStatsCache } from '../shared/git-status-line-stats-cache'
 import { invalidateGitBranchLineTotalInFlight } from '../shared/git-branch-line-total'
 import { streamRelayGitStdout } from './git-stdout-stream'
+import { iterateProcessOutputLines } from '../shared/process-output-field-scanner'
 
 const execFileAsync = promisify(execFile)
 const MAX_GIT_BUFFER = 10 * 1024 * 1024
@@ -1376,6 +1377,9 @@ export class GitHandler {
       throw new Error('Invalid preserved branch cleanup provenance request.')
     }
     await this.git(['check-ref-format', '--branch', branchName], repoPath)
+    if (params.preflight === true) {
+      return
+    }
     const key = preservedBranchCleanupConfigKey(branchName)
     if (params.clear === true) {
       try {
@@ -1388,12 +1392,22 @@ export class GitHandler {
       }
       return
     }
-    if (typeof params.expectedHead !== 'string' || params.expectedHead.includes('\0')) {
+    if (
+      typeof params.expectedHead !== 'string' ||
+      params.expectedHead.includes('\0') ||
+      (params.worktreeId !== undefined &&
+        (typeof params.worktreeId !== 'string' ||
+          !params.worktreeId ||
+          params.worktreeId.includes('\0')))
+    ) {
       throw new Error('Invalid preserved branch cleanup provenance request.')
     }
     const serialized = serializePreservedBranchCleanupProvenance(
       params.expectedHead,
-      params.pushTarget as GitPushTarget | undefined
+      params.pushTarget as GitPushTarget | undefined,
+      typeof params.worktreeId === 'string'
+        ? { branchName, worktreeId: params.worktreeId }
+        : undefined
     )
     await this.git(['config', '--local', '--replace-all', key, serialized], repoPath)
   }
@@ -1423,6 +1437,24 @@ export class GitHandler {
     ).stdout.trim()
     if (configuredRemoteUrl !== expectedRemoteUrl) {
       throw new Error(`Refusing to remove changed remote "${remoteName}".`)
+    }
+    let branchRemoteConfig = ''
+    try {
+      branchRemoteConfig = (
+        await this.git(['config', '--get-regexp', '^branch\\..*\\.(remote|pushRemote)$'], repoPath)
+      ).stdout
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code
+      if (code !== 1 && code !== 5 && code !== '1' && code !== '5') {
+        throw error
+      }
+    }
+    for (const line of iterateProcessOutputLines(branchRemoteConfig)) {
+      const separator = line.search(/\s/)
+      const value = separator < 0 ? '' : line.slice(separator + 1).trim()
+      if (value === remoteName || value === expectedRemoteUrl) {
+        throw new Error(`Refusing to remove remote "${remoteName}" while a branch uses it.`)
+      }
     }
     return this.runWithGitReadCacheClear(() => this.git(['remote', 'remove', remoteName], repoPath))
   }

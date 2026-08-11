@@ -46963,6 +46963,77 @@ describe('OrcaRuntimeService', () => {
     }
   })
 
+  it('recovers a runtime preserved review after a lost SSH removal response', async () => {
+    const remoteRepo = {
+      ...store.getRepo(TEST_REPO_ID)!,
+      path: '/remote/repo',
+      connectionId: 'ssh-1'
+    }
+    const remoteWorktree = {
+      path: '/remote/feature-wt',
+      head: 'def456',
+      branch: 'feature/test',
+      isBare: false,
+      isMainWorktree: false
+    }
+    const remoteWorktreeId = `${remoteRepo.id}::${remoteWorktree.path}`
+    const metaById: Record<string, WorktreeMeta> = {
+      [remoteWorktreeId]: makeWorktreeMeta()
+    }
+    const runtimeStore = {
+      ...store,
+      getRepos: () => [remoteRepo],
+      getRepo: (id: string) => (id === remoteRepo.id ? remoteRepo : undefined),
+      getAllWorktreeMeta: () => metaById,
+      getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
+      removeWorktreeMeta: (worktreeId: string) => {
+        delete metaById[worktreeId]
+      }
+    }
+    const removeWorktree = vi.fn()
+    let removalCompleted = false
+    removeWorktree.mockImplementationOnce(async () => {
+      removalCompleted = true
+      throw new Error('response lost')
+    })
+    const mainWorktree = {
+      path: remoteRepo.path,
+      head: 'main',
+      branch: 'main',
+      isBare: false,
+      isMainWorktree: true
+    }
+    const provider = {
+      ...preservedCleanupProviderMethods(),
+      listWorktrees: vi.fn(async () =>
+        removalCompleted ? [mainWorktree] : [mainWorktree, remoteWorktree]
+      ),
+      removeWorktree,
+      exec: vi.fn().mockResolvedValue({
+        stdout: `branch.feature/test.orca-preserved-cleanup {"version":1,"expectedHead":"def456","branchName":"feature/test","worktreeId":"${remoteWorktreeId}"}\n`,
+        stderr: ''
+      })
+    }
+    registerSshGitProvider('ssh-1', provider as never)
+    registerSshFilesystemProvider('ssh-1', {
+      stat: vi.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' })),
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+    } as never)
+    const runtime = createWorktreeRemovalRuntime(runtimeStore)
+
+    try {
+      await expect(runtime.removeManagedWorktree(remoteWorktreeId)).rejects.toThrow('response lost')
+      await expect(runtime.removeManagedWorktree(remoteWorktreeId)).resolves.toEqual({
+        preservedBranch: { branchName: 'feature/test', head: 'def456' }
+      })
+      expect(removeWorktree).toHaveBeenCalledOnce()
+      expect(metaById[remoteWorktreeId]).toBeUndefined()
+    } finally {
+      unregisterSshFilesystemProvider('ssh-1')
+      unregisterSshGitProvider('ssh-1')
+    }
+  })
+
   it('selects the exact runtime host when repos share an id', async () => {
     const localRepo = store.getRepos()[0]!
     const remoteRepo = {

@@ -76,6 +76,7 @@ import {
 import { gitExecFileAsync } from '../git/runner'
 import {
   clearPreservedBranchCleanupProvenance,
+  recoverPreservedBranchCleanupProvenance,
   rememberPreservedBranchCleanupProvenance,
   removeWithPreservedBranchCleanupProvenance,
   resolvePreservedBranchCleanupProvenance,
@@ -2535,20 +2536,31 @@ export function registerWorktreeHandlers(
                 // Why: without persisted metadata, require the renderer recovery path before deleting Orca-only state for an unregistered path.
                 throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
               }
+              const recoveryExecGit: PreservedBranchCleanupGitExec = repo.connectionId
+                ? (argv, cwd) => provider!.exec(argv, cwd)
+                : (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
+              const recoveredCleanup = removedMeta
+                ? await recoverPreservedBranchCleanupProvenance(
+                    recoveryExecGit,
+                    repo.path,
+                    args.worktreeId
+                  )
+                : null
+              const cleanupPushTarget = recoveredCleanup?.pushTarget ?? removedPushTarget
               // Why: a manually deleted worktree is already gone; persisted metadata proves it was an Orca-known row, so no force is needed.
               if (repo.connectionId) {
                 await cleanupUnusedWorktreePushTargetRemoteSsh(
                   provider!,
                   repo.path,
                   args.worktreeId,
-                  removedPushTarget,
+                  cleanupPushTarget,
                   store
                 )
               } else {
                 await cleanupUnusedWorktreePushTargetRemote(
                   repo.path,
                   args.worktreeId,
-                  removedPushTarget,
+                  cleanupPushTarget,
                   store,
                   localWorktreeGitOptions
                 )
@@ -2557,7 +2569,14 @@ export function registerWorktreeHandlers(
               runtime.clearOptimisticReconcileToken(args.worktreeId)
               removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
               notifyWorktreesChanged(mainWindow, repoId)
-              return {}
+              return recoveredCleanup
+                ? {
+                    preservedBranch: {
+                      branchName: recoveredCleanup.branchName,
+                      head: recoveredCleanup.expectedHead
+                    }
+                  }
+                : {}
             }
             throw new Error(`Refusing to delete unregistered worktree path: ${worktreePath}`)
           }
@@ -2599,7 +2618,8 @@ export function registerWorktreeHandlers(
                   repo.path,
                   branchName,
                   expectedHead,
-                  pushTarget
+                  pushTarget,
+                  args.worktreeId
                 ),
               clear: (branchName) =>
                 clearPreservedBranchCleanupProvenance(execGit, repo.path, branchName),
@@ -2649,44 +2669,74 @@ export function registerWorktreeHandlers(
           }
 
           if (remoteConnectionId) {
+            const initialCleanupBranchName = deleteBranch
+              ? registeredWorktree.branch.replace(/^refs\/heads\//, '')
+              : undefined
+            const remoteArchiveScript = !args.skipArchive ? archiveScript : undefined
+            if (initialCleanupBranchName && remoteArchiveScript) {
+              await provider!.preflightPreservedBranchCleanupProvenance(
+                repo.path,
+                initialCleanupBranchName
+              )
+            }
+            if (remoteArchiveScript) {
+              await withWorktreeRemoveStageSpan('archive_hook', 'remote', async () => {
+                const result = await runRemoteArchiveHook(
+                  repo,
+                  canonicalWorktreePath,
+                  remoteArchiveScript
+                )
+                if (!result.success) {
+                  console.error(
+                    `[hooks] archive hook failed for ${canonicalWorktreePath}:`,
+                    result.output
+                  )
+                }
+              })
+            }
+            const refreshedRegisteredWorktree = remoteArchiveScript
+              ? findRegisteredDeletableWorktree(
+                  repo.path,
+                  canonicalWorktreePath,
+                  await provider!.listWorktrees(repo.path)
+                )
+              : registeredWorktree
+            if (!refreshedRegisteredWorktree) {
+              throw new Error(
+                `Worktree registration changed during deletion: ${canonicalWorktreePath}. Retry deletion.`
+              )
+            }
+            try {
+              assertWorktreeUnlockedForRemoval(refreshedRegisteredWorktree)
+            } catch (error) {
+              throw new Error(
+                formatWorktreeRemovalError(error, canonicalWorktreePath, args.force ?? false)
+              )
+            }
+            if (!args.force) {
+              const { clean, stdout } = await provider!.worktreeIsClean(canonicalWorktreePath)
+              if (!clean) {
+                const error = new Error('Worktree has uncommitted or untracked changes.')
+                ;(error as Error & { stdout?: string }).stdout = stdout
+                throw error
+              }
+            }
             const remoteRemoveOptions = !deleteBranch ? { deleteBranch } : {}
             const removalResult = await removeWithPreservedBranchCleanupProvenance({
-              branchName: deleteBranch ? registeredWorktree.branch : undefined,
-              expectedHead: registeredWorktree.head,
+              branchName: deleteBranch ? refreshedRegisteredWorktree.branch : undefined,
+              expectedHead: refreshedRegisteredWorktree.head,
               pushTarget: removedPushTarget,
               remember: (branchName, expectedHead, pushTarget) =>
                 provider!.rememberPreservedBranchCleanupProvenance(
                   repo.path,
                   branchName,
                   expectedHead,
-                  pushTarget
+                  pushTarget,
+                  args.worktreeId
                 ),
               clear: (branchName) =>
                 provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
               remove: async () => {
-                if (archiveScript && !args.skipArchive) {
-                  await withWorktreeRemoveStageSpan('archive_hook', 'remote', async () => {
-                    const result = await runRemoteArchiveHook(
-                      repo,
-                      canonicalWorktreePath,
-                      archiveScript
-                    )
-                    if (!result.success) {
-                      console.error(
-                        `[hooks] archive hook failed for ${canonicalWorktreePath}:`,
-                        result.output
-                      )
-                    }
-                  })
-                }
-                if (!args.force) {
-                  const { clean, stdout } = await provider!.worktreeIsClean(canonicalWorktreePath)
-                  if (!clean) {
-                    const error = new Error('Worktree has uncommitted or untracked changes.')
-                    ;(error as Error & { stdout?: string }).stdout = stdout
-                    throw error
-                  }
-                }
                 const removalGate = await withWorktreeRemoveStageSpan(
                   'watcher_gate',
                   'remote',
@@ -2822,7 +2872,8 @@ export function registerWorktreeHandlers(
                 repo.path,
                 cleanupBranchName,
                 refreshedRegisteredWorktree.head,
-                removedPushTarget
+                removedPushTarget,
+                args.worktreeId
               )
             }
             // Why: hold the watcher/terminal gate through Git and any recursive fallback so no late spawn recreates a native handle.

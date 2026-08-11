@@ -864,6 +864,7 @@ import { resolveLocalGitUsername } from '../git/git-username'
 import { getSshGitCapabilityCache } from '../git/git-capability-state'
 import {
   clearPreservedBranchCleanupProvenance,
+  recoverPreservedBranchCleanupProvenance,
   rememberPreservedBranchCleanupProvenance,
   removeWithPreservedBranchCleanupProvenance,
   resolvePreservedBranchCleanupProvenance,
@@ -24550,6 +24551,17 @@ export class OrcaRuntimeService {
               // path before deleting Orca-only state for an unregistered path.
               throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
             }
+            const recoveryExecGit: PreservedBranchCleanupGitExec = repo.connectionId
+              ? (argv, cwd) => provider!.exec(argv, cwd)
+              : (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
+            const recoveredCleanup = removedMeta
+              ? await recoverPreservedBranchCleanupProvenance(
+                  recoveryExecGit,
+                  repo.path,
+                  removalTarget.id
+                )
+              : null
+            const cleanupPushTarget = recoveredCleanup?.pushTarget ?? removedPushTarget
             // Why: a manually deleted worktree is already gone from Git and disk.
             // Finish runtime metadata cleanup without requiring force or touching
             // any unregistered path that still exists.
@@ -24558,13 +24570,13 @@ export class OrcaRuntimeService {
                   provider!,
                   repo.path,
                   removalTarget.id,
-                  removedPushTarget,
+                  cleanupPushTarget,
                   store
                 )
               : cleanupUnusedWorktreePushTargetRemote(
                   repo.path,
                   removalTarget.id,
-                  removedPushTarget,
+                  cleanupPushTarget,
                   store,
                   localWorktreeGitOptions
                 ))
@@ -24574,7 +24586,14 @@ export class OrcaRuntimeService {
             this.invalidateWorktreeScanCacheForRepo(removalTarget.repoId)
             invalidateAuthorizedRootsCache()
             this.notifyWorktreesChanged(repo.id)
-            return {}
+            return recoveredCleanup
+              ? {
+                  preservedBranch: {
+                    branchName: recoveredCleanup.branchName,
+                    head: recoveredCleanup.expectedHead
+                  }
+                }
+              : {}
           }
           throw new Error(`Refusing to delete unregistered worktree path: ${removalTarget.path}`)
         }
@@ -24612,7 +24631,8 @@ export class OrcaRuntimeService {
                 repo.path,
                 branchName,
                 expectedHead,
-                pushTarget
+                pushTarget,
+                removalTarget.id
               ),
             clear: (branchName) =>
               clearPreservedBranchCleanupProvenance(execGit, repo.path, branchName),
@@ -24659,7 +24679,8 @@ export class OrcaRuntimeService {
                   repo.path,
                   branchName,
                   expectedHead,
-                  pushTarget
+                  pushTarget,
+                  removalTarget.id
                 ),
               clear: (branchName) =>
                 provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
@@ -24798,7 +24819,8 @@ export class OrcaRuntimeService {
               repo.path,
               cleanupBranchName,
               refreshedRegisteredWorktree.head,
-              removedPushTarget
+              removedPushTarget,
+              removalTarget.id
             )
           }
           // Why: linked-path deletion is destructive too; PTYs must release every

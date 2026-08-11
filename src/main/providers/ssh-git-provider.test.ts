@@ -1705,13 +1705,15 @@ describe('SshGitProvider', () => {
       '/home/user/repo',
       'you/fix-auth',
       'abc123',
-      pushTarget
+      pushTarget,
+      'repo-1::/home/user/fix-auth'
     )
     expect(mux.request).toHaveBeenCalledWith('git.rememberPreservedBranchCleanupProvenance', {
       repoPath: '/home/user/repo',
       branchName: 'you/fix-auth',
       expectedHead: 'abc123',
-      pushTarget
+      pushTarget,
+      worktreeId: 'repo-1::/home/user/fix-auth'
     })
   })
 
@@ -1724,6 +1726,27 @@ describe('SshGitProvider', () => {
 
     await expect(
       provider.rememberPreservedBranchCleanupProvenance('/home/user/repo', 'you/fix-auth', 'abc123')
+    ).rejects.toThrow('Reconnect to deploy the latest relay')
+  })
+
+  it('preflights cleanup support without writing authority', async () => {
+    await provider.preflightPreservedBranchCleanupProvenance('/home/user/repo', 'you/fix-auth')
+    expect(mux.request).toHaveBeenCalledWith('git.rememberPreservedBranchCleanupProvenance', {
+      repoPath: '/home/user/repo',
+      branchName: 'you/fix-auth',
+      preflight: true
+    })
+  })
+
+  it('maps an old relay cleanup preflight to the reconnect message', async () => {
+    const methodNotFound = Object.assign(
+      new Error('Method not found: git.rememberPreservedBranchCleanupProvenance'),
+      { code: -32601 }
+    )
+    mux.request.mockRejectedValueOnce(methodNotFound)
+
+    await expect(
+      provider.preflightPreservedBranchCleanupProvenance('/home/user/repo', 'you/fix-auth')
     ).rejects.toThrow('Reconnect to deploy the latest relay')
   })
 

@@ -6261,6 +6261,56 @@ describe('worktree remote runtime mutations', () => {
     expect(store.getState().worktreesByRepo.repo1).toEqual([])
   })
 
+  it('documents new-client/old-host skew without adding a release RPC', async () => {
+    const store = createTestStore()
+    const worktree = makeWorktree({
+      id: 'repo1::/path/legacy-host-wt',
+      repoId: 'repo1',
+      path: '/path/legacy-host-wt'
+    })
+    const oldHostCleanupRoutes = new Map<string, { branchName: string; head: string }>()
+    runtimeEnvironmentCall.mockImplementation(async ({ method }: RuntimeEnvironmentCallRequest) => {
+      if (method !== 'worktree.rm') {
+        throw Object.assign(new Error(`Method not found: ${method}`), { code: 'method_not_found' })
+      }
+      oldHostCleanupRoutes.set(worktree.id, {
+        branchName: 'feature/legacy-host',
+        head: 'legacy-head'
+      })
+      return {
+        id: 'legacy-rm',
+        ok: true,
+        result: {
+          preservedBranch: { branchName: 'feature/legacy-host', head: 'legacy-head' }
+        },
+        _meta: { runtimeId: 'legacy-runtime' }
+      }
+    })
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'env-1' } as never,
+      worktreesByRepo: { repo1: [worktree] }
+    } as Partial<AppState>)
+
+    const result = await store.getState().removeWorktree(worktree.id)
+
+    expect(result).toEqual({
+      ok: true,
+      preservedBranch: {
+        branchName: 'feature/legacy-host',
+        head: 'legacy-head',
+        hostId: 'runtime:env-1',
+        runtimeEnvironmentId: 'env-1'
+      }
+    })
+    expect(runtimeEnvironmentCall.mock.calls.map(([request]) => request.method)).toEqual([
+      'repo.hooksCheck',
+      'worktree.rm'
+    ])
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
+    // An already-deployed old host cannot be taught release; update or restart reclaims this legacy map.
+    expect(oldHostCleanupRoutes.size).toBe(1)
+  })
+
   it('removes a HUB-owned SSH worktree through its exact HUB transport owner', async () => {
     const store = createTestStore()
     const wt = makeWorktree({

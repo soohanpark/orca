@@ -289,6 +289,24 @@ describe('GitHandler', () => {
   })
 
   describe('rememberPreservedBranchCleanupProvenance', () => {
+    it('preflights support without writing branch authority', async () => {
+      gitInit(tmpDir)
+
+      await dispatcher.callRequest('git.rememberPreservedBranchCleanupProvenance', {
+        repoPath: tmpDir,
+        branchName: 'feature/preserved',
+        preflight: true
+      })
+
+      expect(() =>
+        execFileSync(
+          'git',
+          ['config', '--local', '--get', 'branch.feature/preserved.orca-preserved-cleanup'],
+          { cwd: tmpDir, encoding: 'utf-8' }
+        )
+      ).toThrow()
+    })
+
     it('writes and clears exact branch-scoped authority through the narrow RPC', async () => {
       gitInit(tmpDir)
       writeFileSync(path.join(tmpDir, 'file.txt'), 'hello')
@@ -303,6 +321,7 @@ describe('GitHandler', () => {
         repoPath: tmpDir,
         branchName: 'feature/preserved',
         expectedHead,
+        worktreeId: 'repo-1::/repo-feature',
         pushTarget: {
           remoteName: 'contributor',
           branchName: 'user/fix',
@@ -319,6 +338,8 @@ describe('GitHandler', () => {
       expect(JSON.parse(stored)).toEqual({
         version: 1,
         expectedHead,
+        branchName: 'feature/preserved',
+        worktreeId: 'repo-1::/repo-feature',
         pushTarget: {
           remoteName: 'contributor',
           branchName: 'user/fix',
@@ -380,6 +401,30 @@ describe('GitHandler', () => {
           expectedRemoteUrl: 'git@github.com:contributor/orca.git'
         })
       ).rejects.toThrow('Refusing to remove changed remote')
+      expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe(
+        'pr-contributor'
+      )
+    })
+
+    it('keeps a remote that a branch starts using after client preflight', async () => {
+      gitInit(tmpDir)
+      execFileSync(
+        'git',
+        ['remote', 'add', 'pr-contributor', 'git@github.com:contributor/orca.git'],
+        { cwd: tmpDir, stdio: 'pipe' }
+      )
+      execFileSync('git', ['config', 'branch.raced.remote', 'pr-contributor'], {
+        cwd: tmpDir,
+        stdio: 'pipe'
+      })
+
+      await expect(
+        dispatcher.callRequest('git.removeRemoteIfMatches', {
+          repoPath: tmpDir,
+          remoteName: 'pr-contributor',
+          expectedRemoteUrl: 'git@github.com:contributor/orca.git'
+        })
+      ).rejects.toThrow('while a branch uses it')
       expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe(
         'pr-contributor'
       )

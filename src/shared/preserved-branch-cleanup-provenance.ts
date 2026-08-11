@@ -1,9 +1,11 @@
 import type { GitPushTarget } from './types'
 
-type PreservedBranchCleanupProvenance = {
+export type PreservedBranchCleanupProvenance = {
   version: 1
   expectedHead: string
   pushTarget?: GitPushTarget
+  branchName?: string
+  worktreeId?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,22 +47,23 @@ export function preservedBranchCleanupConfigKey(branchName: string): string {
 
 export function serializePreservedBranchCleanupProvenance(
   expectedHead: string,
-  pushTarget?: GitPushTarget
+  pushTarget?: GitPushTarget,
+  identity?: { branchName: string; worktreeId: string }
 ): string {
-  if (!expectedHead) {
+  if (!expectedHead || (identity !== undefined && (!identity.branchName || !identity.worktreeId))) {
     throw new Error('Invalid preserved branch cleanup provenance.')
   }
   return JSON.stringify({
     version: 1,
     expectedHead,
-    ...(pushTarget ? { pushTarget: parsePushTarget(pushTarget) } : {})
+    ...(pushTarget ? { pushTarget: parsePushTarget(pushTarget) } : {}),
+    ...(identity ? identity : {})
   } satisfies PreservedBranchCleanupProvenance)
 }
 
-export function parsePreservedBranchCleanupProvenance(
-  serialized: string,
-  expectedHead: string
-): GitPushTarget | undefined {
+export function decodePreservedBranchCleanupProvenance(
+  serialized: string
+): PreservedBranchCleanupProvenance {
   let value: unknown
   try {
     value = JSON.parse(serialized)
@@ -69,12 +72,32 @@ export function parsePreservedBranchCleanupProvenance(
   }
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ['version', 'expectedHead', 'pushTarget']) ||
+    !hasOnlyKeys(value, ['version', 'expectedHead', 'pushTarget', 'branchName', 'worktreeId']) ||
     value.version !== 1 ||
     typeof value.expectedHead !== 'string' ||
-    value.expectedHead !== expectedHead
+    !value.expectedHead ||
+    (value.branchName !== undefined &&
+      (typeof value.branchName !== 'string' || !value.branchName)) ||
+    (value.worktreeId !== undefined && (typeof value.worktreeId !== 'string' || !value.worktreeId))
   ) {
     throw new Error('Invalid preserved branch cleanup provenance.')
   }
-  return parsePushTarget(value.pushTarget)
+  return {
+    version: 1,
+    expectedHead: value.expectedHead,
+    ...(value.pushTarget !== undefined ? { pushTarget: parsePushTarget(value.pushTarget) } : {}),
+    ...(value.branchName !== undefined ? { branchName: value.branchName } : {}),
+    ...(value.worktreeId !== undefined ? { worktreeId: value.worktreeId } : {})
+  }
+}
+
+export function parsePreservedBranchCleanupProvenance(
+  serialized: string,
+  expectedHead: string
+): GitPushTarget | undefined {
+  const value = decodePreservedBranchCleanupProvenance(serialized)
+  if (value.expectedHead !== expectedHead) {
+    throw new Error('Invalid preserved branch cleanup provenance.')
+  }
+  return value.pushTarget
 }
