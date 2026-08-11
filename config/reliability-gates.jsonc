@@ -3246,7 +3246,7 @@
       ],
       "knownGaps": [
         "The primary headed macOS desktop-server journey is automated locally but not yet run in CI; Windows and Linux window, ConPTY, update, sleep/wake, and firewall behavior remain uncollected.",
-        "STA-3872's HTML focus journey is headed macOS only; headless parity is covered at the shared focus/authority contract rather than with a second HTML UI journey.",
+        "STA-3872's HTML focus journey covers headed macOS and hidden-window Electron, both through the real HTML DOM over CDP; rendererless `orca serve` parity remains covered only at the shared focus/authority contract rather than with an HTML UI journey.",
         "Mixed-version pairings remain conservative only when the completion-aware client and strict-inspection host changes are both present; older peers retain their legacy classification behavior.",
         "The secondary headless parity harness runs on macOS with a local daemon-backed execution owner and independent short-lived encrypted RPC clients; two persistent viewer-store mirrors and reconnect ordering are joined deterministically in the cross-boundary unit test rather than mounted live.",
         "SSH and relay failure ordering is deterministic provider-contract coverage, not a live SSH-host journey or paired-Orca-server proof; WSL has no provider-specific run, and Linux and Windows runs remain uncollected.",
