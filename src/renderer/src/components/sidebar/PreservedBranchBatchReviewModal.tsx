@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { PreservedBranchCleanup } from '@/lib/preserved-branch-cleanup'
 import { useAppStore } from '@/store'
+import { preservedBranchCleanupKey } from '@/lib/preserved-branch-cleanup'
 import { PreservedBranchBatchReviewDialog } from './PreservedBranchBatchReviewDialog'
 import {
   forceDeletePreservedBranchBatch,
@@ -29,10 +30,17 @@ export default function PreservedBranchBatchReviewModal(): React.JSX.Element {
   const activeModal = useAppStore((state) => state.activeModal)
   const modalData = useAppStore((state) => state.modalData)
   const closeModal = useAppStore((state) => state.closeModal)
+  const releasePreservedBranchCleanups = useAppStore(
+    (state) => state.releasePreservedBranchCleanups
+  )
   const branches = useMemo(() => getModalBranches(modalData.branches), [modalData.branches])
   const open = activeModal === 'preserved-branch-review' && branches.length > 0
 
   const handleForceDelete = (selectedBranches: readonly ActionablePreservedBranch[]): void => {
+    const selectedKeys = new Set(selectedBranches.map(preservedBranchCleanupKey))
+    void releasePreservedBranchCleanups(
+      branches.filter((branch) => !selectedKeys.has(preservedBranchCleanupKey(branch)))
+    )
     closeModal()
     void forceDeletePreservedBranchBatch(selectedBranches)
   }
@@ -43,6 +51,7 @@ export default function PreservedBranchBatchReviewModal(): React.JSX.Element {
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) {
+          void releasePreservedBranchCleanups(branches)
           closeModal()
         }
       }}

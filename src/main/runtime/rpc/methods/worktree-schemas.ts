@@ -296,6 +296,10 @@ export const WorktreeForceDeleteBranch = WorktreeSelector.extend({
     .pipe(z.string().min(1, 'Missing expected branch head'))
 })
 
+export const WorktreeReleasePreservedBranchCleanups = z.object({
+  cleanups: z.array(WorktreeForceDeleteBranch).max(1_000)
+})
+
 export const WorktreeResolvePrBase = z.object({
   repo: z
     .unknown()

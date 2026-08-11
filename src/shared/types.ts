@@ -3683,6 +3683,14 @@ export type PersistedMobileClientTabSelections = Record<
   Record<string, PersistedMobileClientTabSelection>
 >
 
+export type PreservedBranchCleanupAuthority = {
+  worktreeId: string
+  hostId?: ExecutionHostId
+  branchName: string
+  expectedHead: string
+  pushTarget?: GitPushTarget
+}
+
 // ─── Persistence shape ──────────────────────────────────────────────
 export type PersistedState = {
   schemaVersion: number
@@ -3695,6 +3703,8 @@ export type PersistedState = {
   sparsePresetsByRepo: Record<string, SparsePreset[]>
   /** Per paired device last tab selection by worktree; keeps mobile navigation across host restarts. */
   mobileClientTabSelectionsByDeviceId?: PersistedMobileClientTabSelections
+  /** Durable branch-delete capability; kept outside removed worktree metadata so it survives restart. */
+  preservedBranchCleanupAuthorities?: Record<string, PreservedBranchCleanupAuthority>
   worktreeMeta: Record<string, WorktreeMeta>
   worktreeLineageById: Record<string, WorktreeLineage>
   workspaceLineageByChildKey: Record<WorkspaceKey, WorkspaceLineage>

@@ -20,7 +20,8 @@ const mocks = vi.hoisted(() => {
     repos: [],
     closeModal: vi.fn(),
     openModal: vi.fn(),
-    forceDeletePreservedBranch: vi.fn()
+    forceDeletePreservedBranch: vi.fn(),
+    releasePreservedBranchCleanups: vi.fn().mockResolvedValue(undefined)
   }
   return { state }
 })
@@ -96,6 +97,7 @@ beforeEach(() => {
   mocks.state.closeModal.mockReset()
   mocks.state.openModal.mockReset()
   mocks.state.forceDeletePreservedBranch.mockReset().mockResolvedValue({ ok: true, deleted: true })
+  mocks.state.releasePreservedBranchCleanups.mockReset().mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -125,6 +127,10 @@ describe('showPreservedBranchBatchToast', () => {
     expect(mocks.state.openModal).toHaveBeenCalledWith('preserved-branch-review', { branches })
     expect(toast.dismiss).toHaveBeenCalledWith('preserved-branch-batch:repo-a::one:2')
     expect(mocks.state.forceDeletePreservedBranch).not.toHaveBeenCalled()
+    vi.mocked(toast.warning)
+      .mock.calls.at(-1)?.[1]
+      ?.onDismiss?.({} as never)
+    expect(mocks.state.releasePreservedBranchCleanups).not.toHaveBeenCalled()
   })
 
   it('force-deletes only the branches selected in review', async () => {
@@ -150,6 +156,9 @@ describe('showPreservedBranchBatchToast', () => {
       'head-one',
       { suppressToast: true }
     )
+    expect(mocks.state.releasePreservedBranchCleanups).toHaveBeenCalledWith([
+      { worktreeId: 'repo-b::two', branchName: 'feature/two', expectedHead: 'head-two' }
+    ])
     expect(toast.success).toHaveBeenCalledWith('Local branches deleted: 1', {
       id: 'force-delete-branch-batch:repo-a::one:1'
     })
@@ -164,6 +173,25 @@ describe('showPreservedBranchBatchToast', () => {
       '3 workspaces removed, 1 branch kept',
       expect.not.objectContaining({ duration: Infinity })
     )
+    vi.mocked(toast.warning)
+      .mock.calls.at(-1)?.[1]
+      ?.onAutoClose?.({} as never)
+    expect(mocks.state.releasePreservedBranchCleanups).toHaveBeenCalledWith([
+      { worktreeId: 'repo-a::one', branchName: 'feature/one' }
+    ])
+  })
+
+  it('releases every branch when review is cancelled', async () => {
+    const branches = [
+      { worktreeId: 'repo-a::one', branchName: 'feature/one', expectedHead: 'head-one' },
+      { worktreeId: 'repo-b::two', branchName: 'feature/two', expectedHead: 'head-two' }
+    ]
+    renderReviewModal(branches)
+
+    await clickButton(document.body, 'Cancel')
+
+    expect(mocks.state.releasePreservedBranchCleanups).toHaveBeenCalledWith(branches)
+    expect(mocks.state.closeModal).toHaveBeenCalledOnce()
   })
 
   it('serializes branch deletion within one repository', async () => {

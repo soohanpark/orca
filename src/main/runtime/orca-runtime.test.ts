@@ -12,6 +12,7 @@ import { basename, join, win32 } from 'node:path'
 import { ipcMain } from 'electron'
 import type {
   FolderWorkspace,
+  PreservedBranchCleanupAuthority,
   ProjectGroup,
   Tab,
   TerminalLayoutSnapshot,
@@ -881,6 +882,7 @@ function resetRuntimeTestMocks(): void {
   updateGitLabMRReviewersMock.mockResolvedValue({ ok: true, reviewers: [] })
   getIssueMock.mockReset()
   getIssueMock.mockResolvedValue(null)
+  runtimeCleanupAuthorities.clear()
 }
 
 beforeEach(resetRuntimeTestMocks)
@@ -1310,6 +1312,8 @@ function createStaleRuntimeWorktreeStore(
   return { runtimeStore, removeWorktreeMeta }
 }
 
+const runtimeCleanupAuthorities = new Map<string, PreservedBranchCleanupAuthority>()
+
 const store = {
   getRepo: (id: string) => store.getRepos().find((repo) => repo.id === id),
   getRepos: () => [
@@ -1350,6 +1354,14 @@ const store = {
       ...meta
     }) as never,
   removeWorktreeMeta: () => {},
+  getPreservedBranchCleanupAuthority: (worktreeId: string, hostId?: string) =>
+    runtimeCleanupAuthorities.get(`${hostId ?? ''}\0${worktreeId}`),
+  setPreservedBranchCleanupAuthority: (authority: PreservedBranchCleanupAuthority) => {
+    runtimeCleanupAuthorities.set(`${authority.hostId ?? ''}\0${authority.worktreeId}`, authority)
+  },
+  removePreservedBranchCleanupAuthority: (worktreeId: string, hostId?: string) => {
+    runtimeCleanupAuthorities.delete(`${hostId ?? ''}\0${worktreeId}`)
+  },
   getSparsePresets: () => [],
   saveSparsePreset: (preset: unknown) => preset as never,
   getGitHubCache: () => undefined as never,
@@ -46780,9 +46792,17 @@ describe('OrcaRuntimeService', () => {
       )
     }
 
-    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(8)
-    cleanupLifecycle.releasePreservedBranchCleanups?.(cleanups.slice(0, -1))
-    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(1)
+    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(runtimeCleanupAuthorities.size).toBe(8)
+    runtime.releasePreservedBranchCleanups(
+      cleanups.slice(0, -1).map((cleanup) => ({
+        worktreeSelector: `id:${cleanup.worktreeId}`,
+        branchName: cleanup.branchName,
+        expectedHead: cleanup.expectedHead
+      }))
+    )
+    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(runtimeCleanupAuthorities.size).toBe(1)
 
     const pending = cleanups.at(-1)!
     await runtime.forceDeletePreservedBranch(
@@ -46796,6 +46816,7 @@ describe('OrcaRuntimeService', () => {
       pending.expectedHead
     )
     expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(runtimeCleanupAuthorities.size).toBe(0)
   })
 
   it('force-deletes an SSH branch that was preserved by runtime worktree removal', async () => {

@@ -295,6 +295,7 @@ type HandlerMap = Record<string, (_event: unknown, args: unknown) => unknown>
 
 describe('registerWorktreeHandlers', () => {
   const handlers: HandlerMap = {}
+  const cleanupAuthorities = new Map<string, Record<string, unknown>>()
   const mainWindow = {
     isDestroyed: () => false,
     webContents: {
@@ -318,7 +319,25 @@ describe('registerWorktreeHandlers', () => {
     removeWorktreeLineage: vi.fn(),
     getAllWorkspaceLineage: vi.fn(),
     getFolderWorkspaces: vi.fn(),
-    getProjectGroups: vi.fn()
+    getProjectGroups: vi.fn(),
+    getPreservedBranchCleanupAuthority: vi.fn((worktreeId: string, hostId?: string) =>
+      cleanupAuthorities.get(`${hostId ?? ''}\0${worktreeId}`)
+    ),
+    setPreservedBranchCleanupAuthority: vi.fn(
+      (authority: { worktreeId: string; hostId?: string }) => {
+        cleanupAuthorities.set(`${authority.hostId ?? ''}\0${authority.worktreeId}`, authority)
+      }
+    ),
+    removePreservedBranchCleanupAuthority: vi.fn((worktreeId: string, hostId?: string) => {
+      cleanupAuthorities.delete(`${hostId ?? ''}\0${worktreeId}`)
+    }),
+    removePreservedBranchCleanupAuthoritiesForWorktree: vi.fn((worktreeId: string) => {
+      for (const [key, authority] of cleanupAuthorities) {
+        if (authority.worktreeId === worktreeId) {
+          cleanupAuthorities.delete(key)
+        }
+      }
+    })
   }
   let runtimeStub: {
     resolveRemoteTrackingBase: ReturnType<typeof vi.fn>
@@ -345,6 +364,7 @@ describe('registerWorktreeHandlers', () => {
     __resetSshWorktreeCreateFetchCacheForTests()
     __resetDetectedWorktreeScanCacheForTests()
     resetPreservedBranchCleanupTargetsForTests()
+    cleanupAuthorities.clear()
     resetSshProviderAuthorities()
     invalidateAuthorizedRootsCache()
     for (const m of [
@@ -9573,11 +9593,13 @@ describe('registerWorktreeHandlers', () => {
       await handlers['worktrees:remove'](null, { worktreeId: cleanup.worktreeId })
     }
 
-    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(8)
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(cleanupAuthorities.size).toBe(8)
     await handlers['worktrees:releasePreservedBranchCleanups']?.(null, {
       cleanups: cleanups.slice(0, -1)
     })
-    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(1)
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(cleanupAuthorities.size).toBe(1)
 
     const pending = cleanups.at(-1)!
     await handlers['worktrees:forceDeletePreservedBranch'](null, pending)
@@ -9587,6 +9609,36 @@ describe('registerWorktreeHandlers', () => {
       pending.expectedHead
     )
     expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(cleanupAuthorities.size).toBe(0)
+  })
+
+  it('keeps old-client authority durable without growing new-host process routing', async () => {
+    const cleanups = Array.from({ length: 8 }, (_, index) => ({
+      worktreeId: `repo-1::/workspace/skew-${index}`,
+      branchName: `skew/${index}`,
+      expectedHead: `skew-head-${index}`,
+      hostId: LOCAL_EXECUTION_HOST_ID
+    }))
+
+    for (const cleanup of cleanups) {
+      mockKnownFeatureWorktree(cleanup.worktreeId.split('::')[1])
+      removeWorktreeMock.mockResolvedValueOnce({
+        preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead }
+      })
+      await handlers['worktrees:remove'](null, { worktreeId: cleanup.worktreeId })
+    }
+
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+    expect(cleanupAuthorities.size).toBe(8)
+
+    const pending = cleanups.at(-1)!
+    await handlers['worktrees:forceDeletePreservedBranch'](null, pending)
+    expect(forceDeleteLocalBranchMock).toHaveBeenLastCalledWith(
+      '/workspace/repo',
+      pending.branchName,
+      pending.expectedHead
+    )
+    expect(cleanupAuthorities.size).toBe(7)
   })
 
   it('force-deletes an SSH branch that was preserved by safe worktree removal', async () => {

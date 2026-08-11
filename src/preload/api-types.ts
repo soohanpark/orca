@@ -41,6 +41,7 @@ import type {
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
 import type { AppIdentity } from '../shared/app-identity'
 import type { ReleaseChannel } from '../shared/release-channel'
+import type { PreservedBranchCleanup } from '../shared/preserved-branch-cleanup'
 import type {
   ForgetRemovedWorktreesForExecutionHostArgs,
   ForgetRemovedWorktreesForExecutionHostResult,
@@ -1413,6 +1414,9 @@ export type PreloadApi = {
       expectedHead: string
       hostId?: ExecutionHostId
     }) => Promise<ForceDeleteWorktreeBranchResult>
+    releasePreservedBranchCleanups: (args: {
+      cleanups: readonly PreservedBranchCleanup[]
+    }) => Promise<{ released: number }>
     updateMeta: (args: { worktreeId: string; updates: Partial<WorktreeMeta> }) => Promise<Worktree>
     listLineage: () => Promise<{
       lineage: Record<string, WorktreeLineage>

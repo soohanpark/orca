@@ -132,6 +132,7 @@ const mockApi = {
     remove: vi.fn().mockResolvedValue(undefined),
     forgetLocal: vi.fn().mockResolvedValue({}),
     forceDeletePreservedBranch: vi.fn().mockResolvedValue({ deleted: true }),
+    releasePreservedBranchCleanups: vi.fn().mockResolvedValue({ released: 0 }),
     resolvePrBase: vi.fn(),
     resolveMrBase: vi.fn(),
     updateMeta: vi.fn().mockResolvedValue(undefined),
@@ -6318,7 +6319,10 @@ describe('worktree remote runtime mutations', () => {
 
     const forceResult = await store
       .getState()
-      .forceDeletePreservedBranch(wt.id, 'feature/nested', 'saved-head')
+      .forceDeletePreservedBranch(wt.id, 'feature/nested', 'saved-head', {
+        hostId: 'ssh:hub-private-target',
+        runtimeEnvironmentId: 'owner-hub'
+      })
 
     expect(forceResult).toEqual({ ok: true, deleted: true })
     expect(runtimeEnvironmentCall).toHaveBeenNthCalledWith(2, {
@@ -6427,13 +6431,51 @@ describe('worktree remote runtime mutations', () => {
       await store.getState().removeWorktree(worktree.id)
     }
 
-    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(8)
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
     await (
       store.getState() as unknown as {
         releasePreservedBranchCleanups?: (items: typeof cleanups) => Promise<void>
       }
     ).releasePreservedBranchCleanups?.(cleanups)
     expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
+  })
+
+  it('tolerates release against an old runtime while reclaiming new-client routing', async () => {
+    const store = createTestStore()
+    const cleanup = {
+      worktreeId: 'repo-skew::/remote/worktree',
+      branchName: 'feature/skew',
+      expectedHead: 'skew-head',
+      hostId: 'ssh:nested-target' as const,
+      runtimeEnvironmentId: 'old-runtime'
+    }
+    runtimeEnvironmentCall.mockResolvedValueOnce({
+      id: 'rpc-release-skew',
+      ok: false,
+      error: { code: 'method_not_found', message: 'Method not found' },
+      _meta: { runtimeId: 'runtime-old' }
+    })
+
+    await expect(
+      store.getState().releasePreservedBranchCleanups([cleanup])
+    ).resolves.toBeUndefined()
+
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'old-runtime',
+      method: 'worktree.releasePreservedBranchCleanups',
+      params: {
+        cleanups: [
+          {
+            worktree: `id:${cleanup.worktreeId}`,
+            branchName: cleanup.branchName,
+            expectedHead: cleanup.expectedHead,
+            hostId: cleanup.hostId
+          }
+        ]
+      },
+      timeoutMs: 15_000
+    })
   })
 
   it('fails HUB-owned SSH removal closed when the exact id has two HUB owners', async () => {

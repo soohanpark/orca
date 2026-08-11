@@ -4860,6 +4860,38 @@ describe('Store', () => {
 
   // ── 8. setWorktreeMeta and getWorktreeMeta ─────────────────────────
 
+  it('keeps exact preserved-branch authority across metadata removal and restart', async () => {
+    const store = await createStore()
+    const authority = {
+      worktreeId: 'repo-1::/workspace/removed',
+      hostId: toSshExecutionHostId('target-1'),
+      branchName: 'feature/preserved',
+      expectedHead: 'abc123',
+      pushTarget: {
+        remoteName: 'contributor-orca',
+        branchName: 'feature/preserved',
+        remoteUrl: 'https://github.com/contributor/orca.git',
+        remoteCreated: true
+      }
+    }
+    store.setWorktreeMeta(authority.worktreeId, { hostId: authority.hostId })
+    store.setPreservedBranchCleanupAuthority(authority)
+    store.removeWorktreeMeta(authority.worktreeId, authority.hostId)
+    store.flush()
+
+    const restored = await createStore()
+
+    expect(
+      restored.getPreservedBranchCleanupAuthority(authority.worktreeId, authority.hostId)
+    ).toEqual(authority)
+    restored.removePreservedBranchCleanupAuthority(authority.worktreeId, authority.hostId)
+    restored.flush()
+    const released = await createStore()
+    expect(
+      released.getPreservedBranchCleanupAuthority(authority.worktreeId, authority.hostId)
+    ).toBeUndefined()
+  })
+
   it('setWorktreeMeta creates meta with defaults for missing fields', async () => {
     const store = await createStore()
     const meta = store.setWorktreeMeta('wt1', { displayName: 'my-wt' })
