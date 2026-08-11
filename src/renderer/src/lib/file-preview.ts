@@ -1,6 +1,8 @@
 import { toast } from 'sonner'
 import { absolutePathToFileUri } from '@/components/editor/markdown-internal-links'
 import { getConnectionId } from '@/lib/connection-context'
+import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
+import { createWebRuntimeSessionBrowserTab } from '@/runtime/web-runtime-session'
 import { useAppStore } from '@/store'
 import { findSiblingGroupId } from '@/store/slices/tabs'
 
@@ -51,6 +53,15 @@ export function openFileInBrowserTab(params: {
   }
 
   const state = useAppStore.getState()
+  const environmentId = getRuntimeEnvironmentIdForWorktree(state, params.worktreeId)
+  if (environmentId) {
+    void createWebRuntimeSessionBrowserTab({
+      worktreeId: params.worktreeId,
+      environmentId,
+      url: target.url
+    })
+    return target
+  }
 
   state.createBrowserTab(params.worktreeId, target.url, {
     title: target.title,
@@ -111,6 +122,17 @@ export function openFilePreviewToSide(params: {
   })
   if (target.status === 'unsupported') {
     toast.error(target.message)
+    return
+  }
+
+  const environmentId = getRuntimeEnvironmentIdForWorktree(state, worktreeId)
+  if (environmentId) {
+    void createWebRuntimeSessionBrowserTab({
+      worktreeId,
+      environmentId,
+      url: target.url,
+      targetGroupId
+    })
     return
   }
 

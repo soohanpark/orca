@@ -118,6 +118,41 @@ test('keeps a selected remote HTML browser tab focused after host adoption', asy
       })
     await expect(page.getByTestId('remote-browser-frame')).toBeVisible({ timeout: 60_000 })
 
+    const htmlTabInventory = await page.evaluate(
+      async ({ environmentId, fixtureName, worktreeId }) => {
+        const state = window.__store?.getState()
+        const response = await window.api.runtimeEnvironments.call({
+          selector: environmentId,
+          method: 'session.tabs.list',
+          params: { worktree: `id:${worktreeId}` },
+          timeoutMs: 15_000
+        })
+        const clientWorkspaceIds = (state?.browserTabsByWorktree[worktreeId] ?? [])
+          .filter((tab) => tab.url.endsWith(`/${fixtureName}`))
+          .map((tab) => tab.id)
+        return {
+          clientWorkspaceIds,
+          clientUnifiedTabIds: (state?.unifiedTabsByWorktree[worktreeId] ?? [])
+            .filter(
+              (tab) =>
+                tab.contentType === 'browser' && clientWorkspaceIds.includes(tab.entityId)
+            )
+            .map((tab) => tab.id),
+          hostTabIds: response.ok
+            ? response.result.tabs
+                .filter(
+                  (tab) => tab.type === 'browser' && tab.url.endsWith(`/${fixtureName}`)
+                )
+                .map((tab) => tab.id)
+            : []
+        }
+      },
+      { environmentId: client.environmentId, fixtureName: FIXTURE_NAME, worktreeId }
+    )
+    expect(htmlTabInventory.clientWorkspaceIds).toHaveLength(1)
+    expect(htmlTabInventory.clientUnifiedTabIds).toHaveLength(1)
+    expect(htmlTabInventory.hostTabIds).toHaveLength(1)
+
     const tabIds = await page.evaluate(
       ({ fixtureName, worktreeId: targetWorktreeId }) => {
         const state = window.__store?.getState()
