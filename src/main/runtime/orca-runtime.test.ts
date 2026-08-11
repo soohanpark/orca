@@ -46752,6 +46752,52 @@ describe('OrcaRuntimeService', () => {
     )
   })
 
+  it('reclaims completed runtime reviews while retaining pending force-delete authority', async () => {
+    const runtime = createWorktreeRemovalRuntime()
+    const cleanups = Array.from({ length: 8 }, (_, index) => ({
+      worktreeId: index === 7 ? TEST_WORKTREE_ID : `${TEST_REPO_ID}::/workspace/feature-${index}`,
+      branchName: `feature/${index}`,
+      expectedHead: `head-${index}`
+    }))
+    const cleanupLifecycle = runtime as unknown as {
+      rememberPreservedBranchCleanupTarget: (
+        worktreeId: string,
+        hostId: undefined,
+        result: { preservedBranch: { branchName: string; head: string } },
+        fallbackHead: undefined,
+        pushTarget: undefined
+      ) => void
+      releasePreservedBranchCleanups?: (items: typeof cleanups) => void
+    }
+
+    for (const cleanup of cleanups) {
+      cleanupLifecycle.rememberPreservedBranchCleanupTarget(
+        cleanup.worktreeId,
+        undefined,
+        { preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead } },
+        undefined,
+        undefined
+      )
+    }
+
+    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(8)
+    cleanupLifecycle.releasePreservedBranchCleanups?.(cleanups.slice(0, -1))
+    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(1)
+
+    const pending = cleanups.at(-1)!
+    await runtime.forceDeletePreservedBranch(
+      pending.worktreeId,
+      pending.branchName,
+      pending.expectedHead
+    )
+    expect(forceDeleteLocalBranchMock).toHaveBeenLastCalledWith(
+      TEST_REPO_PATH,
+      pending.branchName,
+      pending.expectedHead
+    )
+    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
+  })
+
   it('force-deletes an SSH branch that was preserved by runtime worktree removal', async () => {
     const remoteRepo = {
       ...store.getRepo(TEST_REPO_ID)!,

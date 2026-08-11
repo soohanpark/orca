@@ -3202,6 +3202,10 @@ export class OrcaRuntimeService {
   private optimisticReconcileTokens = new Map<string, string>()
   private removeManagedWorktreeInFlight = new Map<string, RuntimeWorktreeRemovalInFlight>()
   private preservedBranchCleanupByScope = new Map<string, PreservedBranchCleanupTarget>()
+
+  getPreservedBranchCleanupTargetCountForTests(): number {
+    return this.preservedBranchCleanupByScope.size
+  }
   private readonly getLocalProviderFn: (() => IPtyProvider) | null
   private readonly getSshProviderFn: ((connectionId: string) => IPtyProvider | undefined) | null
   private readonly onPtyStopped: ((ptyId: string) => void) | null

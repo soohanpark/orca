@@ -151,6 +151,14 @@ const preservedBranchRuntimeTargetByCleanupKey = new Map<
   string,
   { cleanup: PreservedBranchCleanup; target: ReturnType<typeof getActiveRuntimeTarget> }
 >()
+
+export function getPreservedBranchRuntimeTargetCountForTests(): number {
+  return preservedBranchRuntimeTargetByCleanupKey.size
+}
+
+export function resetPreservedBranchRuntimeTargetsForTests(): void {
+  preservedBranchRuntimeTargetByCleanupKey.clear()
+}
 const folderWorkspaceWorktreeCache = new WeakMap<FolderWorkspace, Worktree>()
 const hostedReviewPushTargetLookupsInFlight = new Set<string>()
 const runtimeDetectedWorktreeRefreshesInFlight = new Map<

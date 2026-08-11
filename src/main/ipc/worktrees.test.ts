@@ -280,7 +280,9 @@ import {
   LINEAGE_HYDRATION_TIMEOUT_MS,
   __getDetectedWorktreeScanCacheStatsForTests,
   __resetDetectedWorktreeScanCacheForTests,
-  registerWorktreeHandlers
+  getPreservedBranchCleanupTargetCountForTests,
+  registerWorktreeHandlers,
+  resetPreservedBranchCleanupTargetsForTests
 } from './worktrees'
 import { clearConfiguredWorktreeSharedDirectoriesCacheForTests } from '../git/worktree-shared-directories'
 import {
@@ -342,6 +344,7 @@ describe('registerWorktreeHandlers', () => {
     clearConfiguredWorktreeSharedDirectoriesCacheForTests()
     __resetSshWorktreeCreateFetchCacheForTests()
     __resetDetectedWorktreeScanCacheForTests()
+    resetPreservedBranchCleanupTargetsForTests()
     resetSshProviderAuthorities()
     invalidateAuthorizedRootsCache()
     for (const m of [
@@ -9552,6 +9555,38 @@ describe('registerWorktreeHandlers', () => {
       'feature/test',
       'def456'
     )
+  })
+
+  it('reclaims completed IPC reviews while retaining pending force-delete authority', async () => {
+    const cleanups = Array.from({ length: 8 }, (_, index) => ({
+      worktreeId: `repo-1::/workspace/feature-${index}`,
+      branchName: `feature/${index}`,
+      expectedHead: `head-${index}`,
+      hostId: LOCAL_EXECUTION_HOST_ID
+    }))
+
+    for (const cleanup of cleanups) {
+      mockKnownFeatureWorktree(cleanup.worktreeId.split('::')[1])
+      removeWorktreeMock.mockResolvedValueOnce({
+        preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead }
+      })
+      await handlers['worktrees:remove'](null, { worktreeId: cleanup.worktreeId })
+    }
+
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(8)
+    await handlers['worktrees:releasePreservedBranchCleanups']?.(null, {
+      cleanups: cleanups.slice(0, -1)
+    })
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(1)
+
+    const pending = cleanups.at(-1)!
+    await handlers['worktrees:forceDeletePreservedBranch'](null, pending)
+    expect(forceDeleteLocalBranchMock).toHaveBeenLastCalledWith(
+      '/workspace/repo',
+      pending.branchName,
+      pending.expectedHead
+    )
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
   })
 
   it('force-deletes an SSH branch that was preserved by safe worktree removal', async () => {

@@ -532,6 +532,14 @@ type PreservedBranchCleanupTarget = {
 
 const preservedBranchCleanupByScope = new Map<string, PreservedBranchCleanupTarget>()
 
+export function getPreservedBranchCleanupTargetCountForTests(): number {
+  return preservedBranchCleanupByScope.size
+}
+
+export function resetPreservedBranchCleanupTargetsForTests(): void {
+  preservedBranchCleanupByScope.clear()
+}
+
 function rememberPreservedBranchCleanupTarget(
   worktreeId: string,
   hostId: ExecutionHostId,

@@ -167,9 +167,11 @@ import {
   WORKTREE_REFRESH_CONCURRENCY,
   acquireDirectSshDetectedWorktreeRefresh,
   createWorktreeSlice,
+  getPreservedBranchRuntimeTargetCountForTests,
   getHostedReviewLinkMutationGenerationForTests,
   getHostedReviewLinkWorktreeAliasCountForTests,
   resetAuthoritativelyRemovedWorktreeMemoryForTests,
+  resetPreservedBranchRuntimeTargetsForTests,
   resetHostedReviewLinkMutationGenerationForTests
 } from './worktrees'
 import type { PendingWorktreeCreation } from '@/lib/pending-worktree-creation'
@@ -197,6 +199,7 @@ function resetRemoteRuntimeMocks() {
 // earlier describe would silently suppress a row here. Reset for every case, not just the fetch suites.
 beforeEach(() => {
   resetAuthoritativelyRemovedWorktreeMemoryForTests()
+  resetPreservedBranchRuntimeTargetsForTests()
 })
 
 function createTestStore() {
@@ -6401,6 +6404,36 @@ describe('worktree remote runtime mutations', () => {
         }
       })
     )
+  })
+
+  it('reclaims every renderer route when repeated unique reviews complete', async () => {
+    const store = createTestStore()
+    const cleanups = Array.from({ length: 8 }, (_, index) => ({
+      worktreeId: `repo-cleanup::/path/wt-${index}`,
+      branchName: `feature/${index}`,
+      expectedHead: `head-${index}`
+    }))
+
+    for (const cleanup of cleanups) {
+      const worktree = makeWorktree({
+        id: cleanup.worktreeId,
+        repoId: 'repo-cleanup',
+        path: cleanup.worktreeId.split('::')[1]
+      })
+      mockApi.worktrees.remove.mockResolvedValueOnce({
+        preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead }
+      })
+      store.setState({ worktreesByRepo: { 'repo-cleanup': [worktree] } } as Partial<AppState>)
+      await store.getState().removeWorktree(worktree.id)
+    }
+
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(8)
+    await (
+      store.getState() as unknown as {
+        releasePreservedBranchCleanups?: (items: typeof cleanups) => Promise<void>
+      }
+    ).releasePreservedBranchCleanups?.(cleanups)
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
   })
 
   it('fails HUB-owned SSH removal closed when the exact id has two HUB owners', async () => {
