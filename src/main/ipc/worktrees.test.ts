@@ -8906,8 +8906,20 @@ describe('registerWorktreeHandlers', () => {
     runtimeStub.closeFileWatchersForRemoval.mockImplementationOnce(async () => {
       callOrder.push('watchers')
     })
+    const preservedCleanup = preservedCleanupProviderMethods()
     const provider = {
-      ...preservedCleanupProviderMethods(),
+      ...preservedCleanup,
+      rememberPreservedBranchCleanupProvenance: vi.fn(
+        async (repoPath: string, branchName: string, expectedHead: string, pushTarget: unknown) => {
+          callOrder.push('remember')
+          return preservedCleanup.rememberPreservedBranchCleanupProvenance(
+            repoPath,
+            branchName,
+            expectedHead,
+            pushTarget
+          )
+        }
+      ),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -8969,7 +8981,7 @@ describe('registerWorktreeHandlers', () => {
       '/remote/feature-wt',
       'conn-1'
     )
-    expect(callOrder).toEqual(['archive', 'preflight', 'watchers', 'remove'])
+    expect(callOrder).toEqual(['remember', 'archive', 'preflight', 'watchers', 'remove'])
     expect(runHookMock).not.toHaveBeenCalled()
   })
 
@@ -8984,7 +8996,20 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const callOrder: string[] = []
+    const preservedCleanup = preservedCleanupProviderMethods()
     const provider = {
+      ...preservedCleanup,
+      rememberPreservedBranchCleanupProvenance: vi.fn(
+        async (repoPath: string, branchName: string, expectedHead: string, pushTarget: unknown) => {
+          callOrder.push('remember')
+          return preservedCleanup.rememberPreservedBranchCleanupProvenance(
+            repoPath,
+            branchName,
+            expectedHead,
+            pushTarget
+          )
+        }
+      ),
       listWorktrees: vi.fn().mockResolvedValue([
         {
           path: '/remote/repo',
@@ -9031,7 +9056,7 @@ describe('registerWorktreeHandlers', () => {
       })
     ).rejects.toThrow('Worktree has uncommitted or untracked changes.')
 
-    expect(callOrder).toEqual(['archive', 'preflight'])
+    expect(callOrder).toEqual(['remember', 'archive', 'preflight'])
     expect(provider.removeWorktree).not.toHaveBeenCalled()
     expect(store.removeWorktreeMeta).not.toHaveBeenCalled()
   })
@@ -9774,6 +9799,12 @@ describe('registerWorktreeHandlers', () => {
       worktreeBaseRef: null
     }
     const removeWorktree = vi.fn()
+    const execNonInteractive = vi.fn().mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      timedOut: false
+    })
     const provider = {
       ...preservedCleanupProviderMethods(),
       rememberPreservedBranchCleanupProvenance: vi
@@ -9790,6 +9821,54 @@ describe('registerWorktreeHandlers', () => {
         }
       ]),
       removeWorktree,
+      execNonInteractive,
+      worktreeIsClean: vi.fn().mockResolvedValue({ clean: true })
+    }
+    const fsProvider = {
+      readFile: vi.fn().mockResolvedValue({
+        content: 'scripts:\n  archive: echo archived\n',
+        isBinary: false
+      })
+    }
+    store.getRepos.mockReturnValue([repo])
+    store.getRepo.mockReturnValue(repo)
+    getSshGitProviderMock.mockReturnValue(provider)
+    getSshFilesystemProviderMock.mockReturnValue(fsProvider)
+    getEffectiveHooksFromConfigMock.mockReturnValue({ scripts: { archive: 'echo archived' } })
+
+    await expect(
+      handlers['worktrees:remove'](null, { worktreeId: 'repo-ssh::/remote/feature-wt' })
+    ).rejects.toThrow('Reconnect to deploy the latest relay')
+    expect(removeWorktree).not.toHaveBeenCalled()
+    expect(execNonInteractive).not.toHaveBeenCalled()
+    expect(killAllProcessesForWorktreeMock).not.toHaveBeenCalled()
+    expect(store.removeWorktreeMeta).not.toHaveBeenCalled()
+  })
+
+  it('retains SSH cleanup authority when the removal response is lost', async () => {
+    const repo = {
+      id: 'repo-ssh',
+      path: '/remote/repo',
+      displayName: 'ssh',
+      badgeColor: '#000',
+      addedAt: 0,
+      connectionId: 'conn-1',
+      worktreeBaseRef: null
+    }
+    const preservedCleanup = preservedCleanupProviderMethods()
+    const provider = {
+      ...preservedCleanup,
+      listWorktrees: vi.fn().mockResolvedValue([
+        { path: repo.path, head: 'main', branch: 'main', isBare: false, isMainWorktree: true },
+        {
+          path: '/remote/feature-wt',
+          head: 'def456',
+          branch: 'feature/test',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ]),
+      removeWorktree: vi.fn().mockRejectedValue(new Error('response lost')),
       worktreeIsClean: vi.fn().mockResolvedValue({ clean: true })
     }
     store.getRepos.mockReturnValue([repo])
@@ -9798,9 +9877,9 @@ describe('registerWorktreeHandlers', () => {
 
     await expect(
       handlers['worktrees:remove'](null, { worktreeId: 'repo-ssh::/remote/feature-wt' })
-    ).rejects.toThrow('Reconnect to deploy the latest relay')
-    expect(removeWorktree).not.toHaveBeenCalled()
-    expect(killAllProcessesForWorktreeMock).not.toHaveBeenCalled()
+    ).rejects.toThrow('response lost')
+    expect(provider.rememberPreservedBranchCleanupProvenance).toHaveBeenCalledOnce()
+    expect(provider.clearPreservedBranchCleanupProvenance).not.toHaveBeenCalled()
     expect(store.removeWorktreeMeta).not.toHaveBeenCalled()
   })
 
@@ -9906,6 +9985,68 @@ describe('registerWorktreeHandlers', () => {
     expect(gitExecFileAsyncMock).toHaveBeenCalledWith(['remote', 'remove', 'pr-contributor-orca'], {
       cwd: '/workspace/repo'
     })
+  })
+
+  it('uses the narrow SSH RPC to remove an unused Orca-created fork remote', async () => {
+    const repo = {
+      id: 'repo-ssh',
+      path: '/remote/repo',
+      displayName: 'ssh',
+      badgeColor: '#000',
+      addedAt: 0,
+      connectionId: 'conn-1',
+      worktreeBaseRef: null
+    }
+    const pushTarget = {
+      remoteName: 'pr-contributor-orca',
+      branchName: 'feature/from-fork',
+      remoteUrl: 'https://github.com/contributor/orca.git',
+      remoteCreated: true
+    }
+    const removeRemoteIfMatches = vi.fn().mockResolvedValue(undefined)
+    const provider = {
+      ...preservedCleanupProviderMethods(),
+      listWorktrees: vi.fn().mockResolvedValue([
+        { path: repo.path, head: 'main', branch: 'main', isBare: false, isMainWorktree: true },
+        {
+          path: '/remote/feature-wt',
+          head: 'def456',
+          branch: 'feature/test',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ]),
+      removeWorktree: vi.fn().mockResolvedValue({}),
+      worktreeIsClean: vi.fn().mockResolvedValue({ clean: true }),
+      exec: vi.fn(async (args: string[]) => {
+        if (args[0] === 'config') {
+          throw new Error('no branch config')
+        }
+        if (args[0] === 'remote' && args[1] === 'get-url') {
+          return { stdout: `${pushTarget.remoteUrl}\n`, stderr: '' }
+        }
+        throw new Error(`Unexpected generic SSH git command: ${args.join(' ')}`)
+      }),
+      removeRemoteIfMatches
+    }
+    const worktreeId = 'repo-ssh::/remote/feature-wt'
+    store.getRepos.mockReturnValue([repo])
+    store.getRepo.mockReturnValue(repo)
+    store.getWorktreeMeta.mockReturnValue(makeWorktreeMeta({ pushTarget }))
+    store.getAllWorktreeMeta.mockReturnValue({ [worktreeId]: makeWorktreeMeta({ pushTarget }) })
+    getSshGitProviderMock.mockReturnValue(provider)
+
+    await handlers['worktrees:remove'](null, { worktreeId })
+
+    expect(removeRemoteIfMatches).toHaveBeenCalledWith(
+      repo.path,
+      pushTarget.remoteName,
+      pushTarget.remoteUrl
+    )
+    expect(provider.exec).not.toHaveBeenCalledWith(
+      ['remote', 'remove', pushTarget.remoteName],
+      repo.path
+    )
   })
 
   it('keeps an Orca-created fork remote while another worktree still uses it', async () => {

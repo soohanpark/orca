@@ -1736,6 +1736,19 @@ describe('SshGitProvider', () => {
     })
   })
 
+  it('removeRemoteIfMatches uses the narrow remote cleanup RPC', async () => {
+    await provider.removeRemoteIfMatches(
+      '/home/user/repo',
+      'pr-contributor-orca',
+      'git@github.com:contributor/orca.git'
+    )
+    expect(mux.request).toHaveBeenCalledWith('git.removeRemoteIfMatches', {
+      repoPath: '/home/user/repo',
+      remoteName: 'pr-contributor-orca',
+      expectedRemoteUrl: 'git@github.com:contributor/orca.git'
+    })
+  })
+
   it('forceDeletePreservedBranch maps old relays to the reconnect message', async () => {
     const methodNotFound = Object.assign(
       new Error('Method not found: git.forceDeletePreservedBranch'),

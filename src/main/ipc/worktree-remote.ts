@@ -1116,7 +1116,9 @@ export async function cleanupUnusedWorktreePushTargetRemoteSsh(
       removedWorktreeId,
       target,
       store,
-      (args, cwd) => provider.exec(args, cwd)
+      (args, cwd) => provider.exec(args, cwd),
+      (remoteName, expectedRemoteUrl) =>
+        provider.removeRemoteIfMatches(repoPath, remoteName, expectedRemoteUrl)
     )
   } catch (error) {
     console.warn(

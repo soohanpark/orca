@@ -176,6 +176,20 @@ describe('preserved branch cleanup provenance', () => {
     }
   })
 
+  it('retains authority when removal completion is unknown', async () => {
+    const clear = vi.fn()
+    await expect(
+      removeWithPreservedBranchCleanupProvenance({
+        branchName: 'feature/test',
+        expectedHead: 'head',
+        remember: vi.fn().mockResolvedValue(undefined),
+        clear,
+        remove: vi.fn().mockRejectedValue(new Error('response lost'))
+      })
+    ).rejects.toThrow('response lost')
+    expect(clear).not.toHaveBeenCalled()
+  })
+
   it('clears branch-scoped provenance explicitly', async () => {
     const { execGit, path } = await createRepo()
     const head = (await execGit(['rev-parse', 'feature/test'], path)).stdout.trim()

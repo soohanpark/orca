@@ -872,6 +872,20 @@ export class SshGitProvider implements IGitProvider {
     })
   }
 
+  async removeRemoteIfMatches(
+    repoPath: string,
+    remoteName: string,
+    expectedRemoteUrl: string
+  ): Promise<void> {
+    await this.runWithDiffDedupeClear(async () => {
+      await this.mux.request('git.removeRemoteIfMatches', {
+        repoPath,
+        remoteName,
+        expectedRemoteUrl
+      })
+    })
+  }
+
   async exec(
     args: string[],
     cwd: string,

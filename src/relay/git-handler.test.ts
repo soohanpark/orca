@@ -134,6 +134,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.refreshLocalBaseRefForWorktreeCreate')
     expect(methods).toContain('git.renameCurrentBranch')
     expect(methods).toContain('git.rememberPreservedBranchCleanupProvenance')
+    expect(methods).toContain('git.removeRemoteIfMatches')
     expect(methods).toContain('git.forceDeletePreservedBranch')
     expect(methods).toContain('git.exec')
     expect(methods).toContain('git.clone')
@@ -338,6 +339,50 @@ describe('GitHandler', () => {
           { cwd: tmpDir, encoding: 'utf-8' }
         )
       ).toThrow()
+    })
+  })
+
+  describe('removeRemoteIfMatches', () => {
+    it('removes only through the exact write-capable RPC', async () => {
+      gitInit(tmpDir)
+      execFileSync(
+        'git',
+        ['remote', 'add', 'pr-contributor', 'git@github.com:contributor/orca.git'],
+        { cwd: tmpDir, stdio: 'pipe' }
+      )
+
+      await expect(
+        dispatcher.callRequest('git.exec', {
+          args: ['remote', 'remove', 'pr-contributor'],
+          cwd: tmpDir
+        })
+      ).rejects.toThrow('Destructive git remote operations are not allowed via exec')
+      await dispatcher.callRequest('git.removeRemoteIfMatches', {
+        repoPath: tmpDir,
+        remoteName: 'pr-contributor',
+        expectedRemoteUrl: 'git@github.com:contributor/orca.git'
+      })
+
+      expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe('')
+    })
+
+    it('keeps a remote whose URL changed after preflight', async () => {
+      gitInit(tmpDir)
+      execFileSync('git', ['remote', 'add', 'pr-contributor', 'https://example.com/changed.git'], {
+        cwd: tmpDir,
+        stdio: 'pipe'
+      })
+
+      await expect(
+        dispatcher.callRequest('git.removeRemoteIfMatches', {
+          repoPath: tmpDir,
+          remoteName: 'pr-contributor',
+          expectedRemoteUrl: 'git@github.com:contributor/orca.git'
+        })
+      ).rejects.toThrow('Refusing to remove changed remote')
+      expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe(
+        'pr-contributor'
+      )
     })
   })
 

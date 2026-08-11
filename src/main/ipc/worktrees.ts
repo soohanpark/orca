@@ -2626,92 +2626,100 @@ export function registerWorktreeHandlers(
             return removalResult ?? {}
           }
 
-          // Run archive hook before removal so teardown scripts still see the worktree directory.
+          const remoteConnectionId = repo.connectionId ?? undefined
+          // Run local archive hooks before removal; SSH hooks run after durable-authority preflight.
           const hooks = await getArchiveHooksForRemoval(repo)
           const archiveScript = hooks?.scripts.archive
-          if (archiveScript && !args.skipArchive) {
-            // Why the branch on connectionId: this block is shared by both flows, so a hardcoded
-            // 'remote' would file every local archive hook under the SSH breakdown.
-            await withWorktreeRemoveStageSpan(
-              'archive_hook',
-              repo.connectionId ? 'remote' : 'local',
-              async () => {
-                const result = repo.connectionId
-                  ? await runRemoteArchiveHook(repo, canonicalWorktreePath, archiveScript)
-                  : await runHook(
-                      'archive',
-                      canonicalWorktreePath,
-                      repo,
-                      undefined,
-                      localWorktreeGitOptions
-                    )
-                if (!result.success) {
-                  console.error(
-                    `[hooks] archive hook failed for ${canonicalWorktreePath}:`,
-                    result.output
-                  )
-                }
+          if (archiveScript && !args.skipArchive && !remoteConnectionId) {
+            await withWorktreeRemoveStageSpan('archive_hook', 'local', async () => {
+              const result = await runHook(
+                'archive',
+                canonicalWorktreePath,
+                repo,
+                undefined,
+                localWorktreeGitOptions
+              )
+              if (!result.success) {
+                console.error(
+                  `[hooks] archive hook failed for ${canonicalWorktreePath}:`,
+                  result.output
+                )
               }
-            )
+            })
           }
 
-          const remoteConnectionId = repo.connectionId ?? undefined
           if (remoteConnectionId) {
-            // Why: SSH deletion mirrors the local flow — hooks run while the directory is intact, then the clean check guards removal.
-            if (!args.force) {
-              const { clean, stdout } = await provider!.worktreeIsClean(canonicalWorktreePath)
-              if (!clean) {
-                const error = new Error('Worktree has uncommitted or untracked changes.')
-                ;(error as Error & { stdout?: string }).stdout = stdout
-                throw error
-              }
-            }
-
             const remoteRemoveOptions = !deleteBranch ? { deleteBranch } : {}
-            const removalGate = await withWorktreeRemoveStageSpan(
-              'watcher_gate',
-              'remote',
-              async () =>
-                runtime.acquireFileWatcherRemoval(canonicalWorktreePath, remoteConnectionId)
-            )
-            let removalResult: RemoveWorktreeResult
-            let removalCompleted = false
-            try {
-              removalResult = await removeWithPreservedBranchCleanupProvenance({
-                branchName: deleteBranch ? registeredWorktree.branch : undefined,
-                expectedHead: registeredWorktree.head,
-                pushTarget: removedPushTarget,
-                remember: (branchName, expectedHead, pushTarget) =>
-                  provider!.rememberPreservedBranchCleanupProvenance(
-                    repo.path,
-                    branchName,
-                    expectedHead,
-                    pushTarget
-                  ),
-                clear: (branchName) =>
-                  provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
-                remove: async () => {
+            const removalResult = await removeWithPreservedBranchCleanupProvenance({
+              branchName: deleteBranch ? registeredWorktree.branch : undefined,
+              expectedHead: registeredWorktree.head,
+              pushTarget: removedPushTarget,
+              remember: (branchName, expectedHead, pushTarget) =>
+                provider!.rememberPreservedBranchCleanupProvenance(
+                  repo.path,
+                  branchName,
+                  expectedHead,
+                  pushTarget
+                ),
+              clear: (branchName) =>
+                provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
+              remove: async () => {
+                if (archiveScript && !args.skipArchive) {
+                  await withWorktreeRemoveStageSpan('archive_hook', 'remote', async () => {
+                    const result = await runRemoteArchiveHook(
+                      repo,
+                      canonicalWorktreePath,
+                      archiveScript
+                    )
+                    if (!result.success) {
+                      console.error(
+                        `[hooks] archive hook failed for ${canonicalWorktreePath}:`,
+                        result.output
+                      )
+                    }
+                  })
+                }
+                if (!args.force) {
+                  const { clean, stdout } = await provider!.worktreeIsClean(canonicalWorktreePath)
+                  if (!clean) {
+                    const error = new Error('Worktree has uncommitted or untracked changes.')
+                    ;(error as Error & { stdout?: string }).stdout = stdout
+                    throw error
+                  }
+                }
+                const removalGate = await withWorktreeRemoveStageSpan(
+                  'watcher_gate',
+                  'remote',
+                  async () =>
+                    runtime.acquireFileWatcherRemoval(canonicalWorktreePath, remoteConnectionId)
+                )
+                let removalCompleted = false
+                try {
                   await withWorktreeRemoveStageSpan('pty_sweep', 'remote', async () => {
                     await stopPtysForDestructiveWorktreeRemoval(runtime, args.worktreeId, {
                       connectionId: remoteConnectionId,
                       allowUnverifiedStop: args.allowUnverifiedPtyStop
                     })
                   })
-                  return withWorktreeRemoveStageSpan('git_remove', 'remote', async () =>
-                    Object.keys(remoteRemoveOptions).length > 0
-                      ? provider!.removeWorktree(
-                          canonicalWorktreePath,
-                          args.force,
-                          remoteRemoveOptions
-                        )
-                      : provider!.removeWorktree(canonicalWorktreePath, args.force)
+                  const result = await withWorktreeRemoveStageSpan(
+                    'git_remove',
+                    'remote',
+                    async () =>
+                      Object.keys(remoteRemoveOptions).length > 0
+                        ? provider!.removeWorktree(
+                            canonicalWorktreePath,
+                            args.force,
+                            remoteRemoveOptions
+                          )
+                        : provider!.removeWorktree(canonicalWorktreePath, args.force)
                   )
+                  removalCompleted = true
+                  return result
+                } finally {
+                  await removalGate.finish(removalCompleted)
                 }
-              })
-              removalCompleted = true
-            } finally {
-              await removalGate.finish(removalCompleted)
-            }
+              }
+            })
             await cleanupUnusedWorktreePushTargetRemoteSsh(
               provider!,
               repo.path,

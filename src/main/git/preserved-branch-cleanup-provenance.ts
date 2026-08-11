@@ -102,13 +102,8 @@ export async function removeWithPreservedBranchCleanupProvenance(
   }
 
   await options.remember(branchName, options.expectedHead, options.pushTarget)
-  let result: RemoveWorktreeResult
-  try {
-    result = (await options.remove()) ?? {}
-  } catch (error) {
-    await clearAfterCompletedRemoval(options.clear, branchName)
-    throw error
-  }
+  // Why: do not clear on rejection; a timed-out remote removal may finish after response loss.
+  const result = (await options.remove()) ?? {}
 
   if (!result.preservedBranch) {
     await clearAfterCompletedRemoval(options.clear, branchName)

@@ -266,6 +266,7 @@ export class GitHandler {
     this.dispatcher.onRequest('git.rememberPreservedBranchCleanupProvenance', (p) =>
       this.rememberPreservedBranchCleanupProvenance(p)
     )
+    this.dispatcher.onRequest('git.removeRemoteIfMatches', (p) => this.removeRemoteIfMatches(p))
     this.dispatcher.onRequest('git.forceDeletePreservedBranch', (p) =>
       this.forceDeletePreservedBranch(p)
     )
@@ -1395,6 +1396,35 @@ export class GitHandler {
       params.pushTarget as GitPushTarget | undefined
     )
     await this.git(['config', '--local', '--replace-all', key, serialized], repoPath)
+  }
+
+  private async removeRemoteIfMatches(params: Record<string, unknown>) {
+    const repoPath = params.repoPath
+    const remoteName = params.remoteName
+    const expectedRemoteUrl = params.expectedRemoteUrl
+    if (
+      typeof repoPath !== 'string' ||
+      !repoPath ||
+      repoPath.includes('\0') ||
+      typeof remoteName !== 'string' ||
+      !remoteName ||
+      remoteName.includes('\0') ||
+      remoteName === 'origin' ||
+      remoteName === 'upstream' ||
+      typeof expectedRemoteUrl !== 'string' ||
+      !expectedRemoteUrl ||
+      expectedRemoteUrl.includes('\0')
+    ) {
+      throw new Error('Invalid remote cleanup request.')
+    }
+    await this.git(['check-ref-format', `refs/remotes/${remoteName}/orca-validation`], repoPath)
+    const configuredRemoteUrl = (
+      await this.git(['remote', 'get-url', remoteName], repoPath)
+    ).stdout.trim()
+    if (configuredRemoteUrl !== expectedRemoteUrl) {
+      throw new Error(`Refusing to remove changed remote "${remoteName}".`)
+    }
+    return this.runWithGitReadCacheClear(() => this.git(['remote', 'remove', remoteName], repoPath))
   }
 
   private async isGitRepo(params: Record<string, unknown>) {

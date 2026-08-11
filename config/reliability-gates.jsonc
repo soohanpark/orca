@@ -27,7 +27,7 @@
       "providers": ["local", "ssh", "paired-runtime"],
       "coveredPlatforms": ["macos"],
       "coveredProviders": ["local", "ssh", "paired-runtime"],
-      "coverageNotes": "Deterministic renderer, IPC, runtime, relay, provider, workspace-cleanup, and real-Git contracts cover local, direct-SSH, paired-runtime, nested-host, repeated unique completion, exact pending force-delete authority, stale-head rejection, Git-owned restart durability, one-value provenance, paired-runtime skew, and safe old-relay refusal before mutation.",
+      "coverageNotes": "Deterministic renderer, IPC, runtime, relay, provider, workspace-cleanup, and real-Git contracts cover local, direct-SSH, paired-runtime, nested-host, repeated unique completion, exact pending force-delete authority, stale-head rejection, Git-owned restart durability, one-value provenance, paired-runtime skew, safe old-relay refusal before mutation, ambiguous-response retention, and exact SSH remote cleanup.",
       "motivatingLinks": [
         "https://linear.app/stably/issue/STA-3926/p2daily-14181-preserved-branch-cleanup-maps-retain-dismissed-entries",
         "https://github.com/stablyai/orca/pull/13693"
@@ -35,10 +35,11 @@
       "invariant": "Renderer, desktop IPC, and runtime retain zero process-local routing records after preserved-branch removal or review completion. A still-pending force-delete uses the request's exact host/runtime authority and reconstructs immutable expected-head and push-target provenance from one branch-scoped Git config value; branch deletion removes that provenance.",
       "oracle": "Create eight uniquely keyed preserved-branch reviews through each ownership path and require process route cardinality to stay zero. Require exact provenance to exist before destructive removal, one targeted read during force-delete, exact host/runtime selection, immutable push-target reconstruction, and stale or missing authority rejection. Exercise old-client/new-host with no release call, new-client/old-host through unchanged paired-runtime methods, and new-client/old-SSH-relay method-not-found before removal.",
       "commands": [
-        "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktrees.test.ts src/main/providers/ssh-git-provider.test.ts src/main/runtime/orca-runtime.test.ts src/relay/git-exec-validator.test.ts src/relay/git-handler.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot"
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktree-push-target-cleanup.test.ts src/main/ipc/worktrees.test.ts src/main/providers/ssh-git-provider.test.ts src/main/runtime/orca-runtime.test.ts src/relay/git-exec-validator.test.ts src/relay/git-handler.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot"
       ],
       "testFiles": [
         "src/main/git/preserved-branch-cleanup-provenance.test.ts",
+        "src/main/ipc/worktree-push-target-cleanup.test.ts",
         "src/main/ipc/worktrees.test.ts",
         "src/main/providers/ssh-git-provider.test.ts",
         "src/main/runtime/orca-runtime.test.ts",
@@ -74,7 +75,7 @@
           "file": "src/main/git/preserved-branch-cleanup-provenance.test.ts",
           "assertions": [
             "one immutable value preserves exact expected-head and push-target authority",
-            "prewrite failure performs no removal and completion cleanup cannot report false failure",
+            "prewrite failure performs no removal, uncertain completion retains authority, and completed cleanup cannot report false failure",
             "branch deletion removes authority without creating phantom remotes"
           ]
         },
@@ -87,7 +88,10 @@
         },
         {
           "file": "src/relay/git-handler.test.ts",
-          "assertions": ["narrow relay RPC writes and clears only the exact branch-scoped value"]
+          "assertions": [
+            "narrow relay RPC writes and clears only the exact branch-scoped value",
+            "generic exec rejects remote mutation while exact-name and exact-URL cleanup succeeds"
+          ]
         },
         {
           "file": "src/relay/git-exec-validator.test.ts",
@@ -103,10 +107,10 @@
           "date": "2026-08-11",
           "runner": "local",
           "platform": "macos",
-          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktrees.test.ts src/main/providers/ssh-git-provider.test.ts src/main/runtime/orca-runtime.test.ts src/relay/git-exec-validator.test.ts src/relay/git-handler.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktree-push-target-cleanup.test.ts src/main/ipc/worktrees.test.ts src/main/providers/ssh-git-provider.test.ts src/main/runtime/orca-runtime.test.ts src/relay/git-exec-validator.test.ts src/relay/git-handler.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot",
           "result": "passed",
           "durationSeconds": 13.49,
-          "summary": "The pre-removal reconstruct-on-demand working tree passed 1,936 focused renderer/main/relay/provider tests with one unrelated skip before the final latest-main rebase."
+          "summary": "The pre-removal reconstruct-on-demand working tree passed 1,942 focused renderer/main/relay/provider tests with one unrelated skip before the final latest-main rebase."
         }
       ],
       "runtimeBudget": {
@@ -123,7 +127,7 @@
       },
       "performanceBudget": {
         "required": true,
-        "evidence": "The three process routing maps and additive release RPC are removed. Preservation writes one exact branch-scoped value before removal and clears it best-effort when no review remains; force-delete performs one targeted read before existing branch/remote cleanup. No polling, timer, retry loop, listener, hot-path scan, provider listing, or retained unique process route key is added."
+        "evidence": "The three process routing maps and additive release RPC are removed. Preservation writes one exact branch-scoped value before removal and clears it best-effort when no review remains; force-delete performs one targeted read before existing branch/remote cleanup. SSH fork-remote cleanup uses its existing fixed read probes plus one exact narrow mutation RPC. No polling, timer, retry loop, listener, hot-path scan, provider listing, or retained unique process route key is added."
       },
       "promotionCriteria": [
         "Collect 100 consecutive focused CI passes or 14 days of soak history.",

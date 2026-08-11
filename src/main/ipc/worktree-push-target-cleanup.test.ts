@@ -80,6 +80,21 @@ describe('cleanupUnusedWorktreePushTargetRemoteWithExec', () => {
     expect(removeCalls(exec)).toEqual([['remote', 'remove', FORK_REMOTE]])
   })
 
+  it('delegates mutation with the exact observed remote URL', async () => {
+    const exec = makeExec()
+    const removeRemote = vi.fn().mockResolvedValue(undefined)
+    await cleanupUnusedWorktreePushTargetRemoteWithExec(
+      REPO_PATH,
+      'repo-1::/wt/a',
+      forkTarget(),
+      storeOf({ 'repo-1::/wt/a': forkTarget() }),
+      exec,
+      removeRemote
+    )
+    expect(removeRemote).toHaveBeenCalledWith(FORK_REMOTE, FORK_URL)
+    expect(removeCalls(exec)).toEqual([])
+  })
+
   it('keeps a remote Orca did not create (remoteCreated falsy)', async () => {
     const exec = makeExec()
     await cleanupUnusedWorktreePushTargetRemoteWithExec(
