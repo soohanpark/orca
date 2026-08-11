@@ -24641,18 +24641,15 @@ export class OrcaRuntimeService {
           return removalResult ?? {}
         }
         if (repo.connectionId) {
+          const connectionId = repo.connectionId
           const remoteRemoveOptions = !deleteBranch ? { deleteBranch } : {}
           const removalGate = await this.acquireFileWatcherRemoval(
             canonicalWorktreePath,
-            repo.connectionId
+            connectionId
           )
           let removalResult: RemoveWorktreeResult
           let removalCompleted = false
           try {
-            await this.stopPtysForDestructiveWorktreeRemoval(removalTarget.id, {
-              connectionId: repo.connectionId,
-              allowUnverifiedStop: allowUnverifiedPtyStop
-            })
             removalResult = await removeWithPreservedBranchCleanupProvenance({
               branchName: deleteBranch ? registeredWorktree.branch : undefined,
               expectedHead: registeredWorktree.head,
@@ -24666,10 +24663,15 @@ export class OrcaRuntimeService {
                 ),
               clear: (branchName) =>
                 provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
-              remove: () =>
-                Object.keys(remoteRemoveOptions).length > 0
+              remove: async () => {
+                await this.stopPtysForDestructiveWorktreeRemoval(removalTarget.id, {
+                  connectionId,
+                  allowUnverifiedStop: allowUnverifiedPtyStop
+                })
+                return Object.keys(remoteRemoveOptions).length > 0
                   ? provider!.removeWorktree(canonicalWorktreePath, force, remoteRemoveOptions)
                   : provider!.removeWorktree(canonicalWorktreePath, force)
+              }
             })
             removalCompleted = true
           } finally {

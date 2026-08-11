@@ -2677,12 +2677,6 @@ export function registerWorktreeHandlers(
             let removalResult: RemoveWorktreeResult
             let removalCompleted = false
             try {
-              await withWorktreeRemoveStageSpan('pty_sweep', 'remote', async () => {
-                await stopPtysForDestructiveWorktreeRemoval(runtime, args.worktreeId, {
-                  connectionId: remoteConnectionId,
-                  allowUnverifiedStop: args.allowUnverifiedPtyStop
-                })
-              })
               removalResult = await removeWithPreservedBranchCleanupProvenance({
                 branchName: deleteBranch ? registeredWorktree.branch : undefined,
                 expectedHead: registeredWorktree.head,
@@ -2696,8 +2690,14 @@ export function registerWorktreeHandlers(
                   ),
                 clear: (branchName) =>
                   provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
-                remove: () =>
-                  withWorktreeRemoveStageSpan('git_remove', 'remote', async () =>
+                remove: async () => {
+                  await withWorktreeRemoveStageSpan('pty_sweep', 'remote', async () => {
+                    await stopPtysForDestructiveWorktreeRemoval(runtime, args.worktreeId, {
+                      connectionId: remoteConnectionId,
+                      allowUnverifiedStop: args.allowUnverifiedPtyStop
+                    })
+                  })
+                  return withWorktreeRemoveStageSpan('git_remove', 'remote', async () =>
                     Object.keys(remoteRemoveOptions).length > 0
                       ? provider!.removeWorktree(
                           canonicalWorktreePath,
@@ -2706,6 +2706,7 @@ export function registerWorktreeHandlers(
                         )
                       : provider!.removeWorktree(canonicalWorktreePath, args.force)
                   )
+                }
               })
               removalCompleted = true
             } finally {

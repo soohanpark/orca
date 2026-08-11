@@ -9800,6 +9800,7 @@ describe('registerWorktreeHandlers', () => {
       handlers['worktrees:remove'](null, { worktreeId: 'repo-ssh::/remote/feature-wt' })
     ).rejects.toThrow('Reconnect to deploy the latest relay')
     expect(removeWorktree).not.toHaveBeenCalled()
+    expect(killAllProcessesForWorktreeMock).not.toHaveBeenCalled()
     expect(store.removeWorktreeMeta).not.toHaveBeenCalled()
   })
 
@@ -10880,6 +10881,7 @@ describe('registerWorktreeHandlers', () => {
     store.getRepo.mockReturnValue(repo)
     const removeWorktree = vi.fn()
     getSshGitProviderMock.mockReturnValue({
+      ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
         { path: '/remote/repo', isMainWorktree: true },
         {
