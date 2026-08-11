@@ -97,9 +97,10 @@ describe('web session intent ownership', () => {
     const firstBarrier = new Promise<void>((resolve) => {
       releaseFirst = resolve
     })
-    const executed = ['first']
+    const executed: string[] = []
     const first = runSerializedWebSessionFocusOperation(OWNER_A, WORKTREE_ID, async () => {
       await firstBarrier
+      executed.push('first')
       return 'first'
     })
     const obsolete = Array.from({ length: 100 }, (_, index) =>

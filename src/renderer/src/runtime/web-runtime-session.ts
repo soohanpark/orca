@@ -761,6 +761,21 @@ async function applyAcknowledgedWebRuntimeSessionTabsSnapshot(
   }
 }
 
+function isRuntimeMobileSessionTabsResult(
+  result: unknown
+): result is RuntimeMobileSessionTabsResult {
+  if (!result || typeof result !== 'object') {
+    return false
+  }
+  const candidate = result as Partial<RuntimeMobileSessionTabsResult>
+  return (
+    typeof candidate.worktree === 'string' &&
+    typeof candidate.publicationEpoch === 'string' &&
+    typeof candidate.snapshotVersion === 'number' &&
+    Array.isArray(candidate.tabs)
+  )
+}
+
 function scheduleRuntimeWorktreeRecoveryRefresh(
   environmentId: string,
   worktreeId: string,
@@ -1096,12 +1111,14 @@ async function callWebRuntimeSessionTabMethod(
     )
     if (activationToken && activationIsCurrent() && matchesWebSessionIntentOwner(intentOwner)) {
       recordReservedWebSessionFocusIntent(intentOwner, args.worktreeId, activationToken, hostTabId)
-      await applyAcknowledgedWebRuntimeSessionTabsSnapshot(
-        environmentId,
-        args.worktreeId,
-        result as RuntimeMobileSessionTabsResult,
-        intentOwner.pairingRevision
-      )
+      if (isRuntimeMobileSessionTabsResult(result)) {
+        await applyAcknowledgedWebRuntimeSessionTabsSnapshot(
+          environmentId,
+          args.worktreeId,
+          result,
+          intentOwner.pairingRevision
+        )
+      }
     }
     if (isClose) {
       const closeResult = result as RuntimeMobileSessionTabCloseResult | undefined

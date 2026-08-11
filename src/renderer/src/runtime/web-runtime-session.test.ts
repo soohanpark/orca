@@ -1692,6 +1692,26 @@ describe('web runtime session tab actions', () => {
     )
   })
 
+  it('keeps focus intent without consuming replay when activation returns no snapshot', async () => {
+    const runtimeCall = vi.fn().mockResolvedValueOnce({ id: 'activate', ok: true })
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    await expect(
+      activateWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified'
+      })
+    ).resolves.toBe(true)
+
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+      hostTabId: 'host-browser-unified'
+    })
+    expect(mocks.acceptReplayedWebSessionTabsSnapshot).not.toHaveBeenCalled()
+    expect(mocks.applyFreshWebSessionTabsSnapshot).not.toHaveBeenCalled()
+  })
+
   it('serializes overlapping activations so the newest host selection wins', async () => {
     const firstSnapshot = { ...makeSnapshot(), snapshotVersion: 2 }
     const secondSnapshot = { ...makeSnapshot(), snapshotVersion: 3 }

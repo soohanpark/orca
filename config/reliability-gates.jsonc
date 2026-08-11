@@ -2876,7 +2876,8 @@
         "pnpm exec electron-vite build --mode e2e",
         "VITE_EXPOSE_STORE=true pnpm run build:web",
         "ORCA_E2E_WEB_CLIENT=1 SKIP_BUILD=1 pnpm exec playwright test tests/e2e/remote-agent-session-focus-authority.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
-        "ORCA_E2E_WEB_CLIENT=1 ORCA_E2E_FORCE_HEADFUL=1 SKIP_BUILD=1 pnpm exec playwright test tests/e2e/paired-remote-html-browser-focus.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "ORCA_E2E_WEB_CLIENT=1 ORCA_E2E_FORCE_HEADFUL=1 SKIP_BUILD=1 ORCA_E2E_FORWARD_APP_LOGS=1 pnpm exec playwright test tests/e2e/paired-remote-html-browser-focus.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "SKIP_BUILD=1 ORCA_E2E_FORWARD_APP_LOGS=1 pnpm run test:e2e tests/e2e/paired-remote-html-browser-focus.spec.ts --workers=1",
         "Manual headed paired-server journey: isolated Orca desktop host + separate paired web client + real Codex process + 20-second WebSocket fault + reconnect + explicit stop",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orca-runtime.test.ts src/main/runtime/terminal-orphan-owner.test.ts src/main/runtime/terminal-orphan-topology.test.ts src/renderer/src/runtime/web-session-terminal-orphan-recovery.test.ts src/renderer/src/runtime/web-session-terminal-orphan-mixed-version.test.ts src/renderer/src/runtime/web-session-tabs-sync.test.ts --maxWorkers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/providers/pty-process-inspection.test.ts src/main/daemon/terminal-host.test.ts src/main/daemon/daemon-pty-router.test.ts src/main/daemon/degraded-daemon-pty-provider.test.ts src/relay/pty-handler.test.ts src/main/daemon/daemon-pty-adapter.test.ts src/main/runtime/orca-runtime.test.ts tests/e2e/remote-agent-completion-authority.unit.test.ts src/renderer/src/runtime/runtime-terminal-inspection.test.ts src/renderer/src/components/terminal-pane/agent-completion-coordinator.test.ts",
@@ -3111,6 +3112,24 @@
           "result": "passed",
           "durationSeconds": 4.05,
           "summary": "STA-3872 validation on origin/main@46756b386a passed 167 focused tests; the byte-identical focus-ordering-disabled control failed 14 assertions. A later Linux changed-E2E run exposed duplicate provisional/canonical HTML identities; routing paired file opens directly to the owning runtime passes the byte-identical local ownership contract, while disabling that route fails it. Freshly rebuilt headed and CI-style hidden desktop-host/paired-client journeys pass with exactly one client workspace, unified browser tab, and host tab plus host inventory, client-store, and visible-frame agreement."
+        },
+        {
+          "date": "2026-08-11",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_WEB_CLIENT=1 ORCA_E2E_FORCE_HEADFUL=1 SKIP_BUILD=1 ORCA_E2E_FORWARD_APP_LOGS=1 pnpm exec playwright test tests/e2e/paired-remote-html-browser-focus.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 8.19,
+          "summary": "The post-review, freshly rebuilt headed desktop-host and paired-web-client journey passed on origin/main@648d17372b with one client browser workspace, one unified client browser tab, one authoritative host tab, and terminal-to-browser focus convergence."
+        },
+        {
+          "date": "2026-08-11",
+          "runner": "local",
+          "platform": "macos",
+          "command": "SKIP_BUILD=1 ORCA_E2E_FORWARD_APP_LOGS=1 pnpm run test:e2e tests/e2e/paired-remote-html-browser-focus.spec.ts --workers=1",
+          "result": "passed",
+          "durationSeconds": 7.39,
+          "summary": "The post-review exact CI-style hidden paired-runtime journey passed on origin/main@648d17372b with the same uniqueness, host-inventory, client-store, and browser-frame oracle."
         },
         {
           "date": "2026-07-23",
