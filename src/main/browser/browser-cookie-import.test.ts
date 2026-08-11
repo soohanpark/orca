@@ -233,7 +233,7 @@ describe('importCookiesFromFile', () => {
   it('flags Google cookies present in the source snapshot', async () => {
     const withGoogle = await importCookiesFromFile(
       writeCookieFile([
-        { domain: '.google.com', name: 'SID', value: 'g', secure: true },
+        { domain: '.google.com', name: '', value: 'invalid', secure: true },
         { domain: '.example.com', name: 'test', value: 'val' }
       ]),
       'persist:test'
@@ -241,6 +241,7 @@ describe('importCookiesFromFile', () => {
     expect(withGoogle.ok).toBe(true)
     if (withGoogle.ok) {
       expect(withGoogle.summary.googleCookiesPresent).toBe(true)
+      expect(withGoogle.summary.domains).toEqual(['example.com'])
     }
 
     const withoutGoogle = await importCookiesFromFile(

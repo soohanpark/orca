@@ -43,7 +43,8 @@ describe('emitBrowserCookieImportToast', () => {
           failedCookies: 3
         }
       },
-      'Imported 3 cookies.'
+      'Imported 3 cookies.',
+      'profile-1'
     )
 
     expect(warningToastMock).toHaveBeenCalledWith(
@@ -62,7 +63,8 @@ describe('emitBrowserCookieImportToast', () => {
           failedCookies: 1
         }
       },
-      'Imported 3 cookies.'
+      'Imported 3 cookies.',
+      'profile-1'
     )
 
     expect(warningToastMock).toHaveBeenCalledWith(
@@ -72,7 +74,7 @@ describe('emitBrowserCookieImportToast', () => {
   })
 
   it('shows success when the import has no warning', () => {
-    emitBrowserCookieImportToast(summary, 'Imported 3 cookies.')
+    emitBrowserCookieImportToast(summary, 'Imported 3 cookies.', 'profile-1')
 
     expect(successToastMock).toHaveBeenCalledWith('Imported 3 cookies.')
     expect(warningToastMock).not.toHaveBeenCalled()
@@ -80,7 +82,11 @@ describe('emitBrowserCookieImportToast', () => {
   })
 
   it('adds the Google direct sign-in notice when the snapshot contained Google cookies', () => {
-    emitBrowserCookieImportToast({ ...summary, googleCookiesPresent: true }, 'Imported 3 cookies.')
+    emitBrowserCookieImportToast(
+      { ...summary, googleCookiesPresent: true },
+      'Imported 3 cookies.',
+      'profile-1'
+    )
 
     expect(successToastMock).toHaveBeenCalledWith('Imported 3 cookies.')
     expect(infoToastMock).toHaveBeenCalledTimes(1)
@@ -101,42 +107,53 @@ describe('emitBrowserCookieImportToast', () => {
           failedCookies: 1
         }
       },
-      'Imported 3 cookies.'
+      'Imported 3 cookies.',
+      'profile-1'
     )
 
     expect(warningToastMock).toHaveBeenCalledTimes(1)
     expect(infoToastMock).toHaveBeenCalledTimes(1)
   })
 
-  it('opens accounts.google.com in a browser tab from the notice action', () => {
+  it('opens accounts.google.com with the imported profile from the notice action', async () => {
     const closeSettingsPage = vi.fn()
-    const createBrowserTab = vi.fn()
+    const openBrowserProfileTabInActiveWorkspace = vi.fn().mockResolvedValue(true)
     getStateMock.mockReturnValue({
-      activeWorktreeId: 'wt-1',
       closeSettingsPage,
-      createBrowserTab
+      openBrowserProfileTabInActiveWorkspace
     })
 
-    emitBrowserCookieImportToast({ ...summary, googleCookiesPresent: true }, 'Imported 3 cookies.')
+    emitBrowserCookieImportToast(
+      { ...summary, googleCookiesPresent: true },
+      'Imported 3 cookies.',
+      'profile-1'
+    )
     infoToastMock.mock.calls[0][1].action.onClick()
 
+    await vi.waitFor(() => expect(closeSettingsPage).toHaveBeenCalledTimes(1))
     expect(closeSettingsPage).toHaveBeenCalledTimes(1)
-    expect(createBrowserTab).toHaveBeenCalledWith('wt-1', 'https://accounts.google.com/', {
-      activate: true
-    })
+    expect(openBrowserProfileTabInActiveWorkspace).toHaveBeenCalledWith(
+      'https://accounts.google.com/',
+      'profile-1'
+    )
   })
 
-  it('does not open a tab when no worktree is active', () => {
-    const createBrowserTab = vi.fn()
+  it('keeps Settings open when no workspace can host the sign-in tab', async () => {
+    const closeSettingsPage = vi.fn()
+    const openBrowserProfileTabInActiveWorkspace = vi.fn().mockResolvedValue(false)
     getStateMock.mockReturnValue({
-      activeWorktreeId: null,
-      closeSettingsPage: vi.fn(),
-      createBrowserTab
+      closeSettingsPage,
+      openBrowserProfileTabInActiveWorkspace
     })
 
-    emitBrowserCookieImportToast({ ...summary, googleCookiesPresent: true }, 'Imported 3 cookies.')
+    emitBrowserCookieImportToast(
+      { ...summary, googleCookiesPresent: true },
+      'Imported 3 cookies.',
+      'profile-1'
+    )
     infoToastMock.mock.calls[0][1].action.onClick()
 
-    expect(createBrowserTab).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(openBrowserProfileTabInActiveWorkspace).toHaveBeenCalledTimes(1))
+    expect(closeSettingsPage).not.toHaveBeenCalled()
   })
 })

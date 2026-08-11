@@ -81,7 +81,8 @@ export function BrowserProfileRow({
                 value1: browser?.label ?? browserFamily,
                 value2: profile.label
               }
-            )
+            ),
+        result.profileId
       )
     } else {
       toast.error(result.reason)
@@ -97,7 +98,8 @@ export function BrowserProfileRow({
           'auto.components.settings.BrowserProfileRow.b4c167764d',
           'Imported {{value0}} cookies from file into {{value1}}.',
           { value0: result.summary.importedCookies, value1: profile.label }
-        )
+        ),
+        result.profileId
       )
     } else if (result.reason !== 'canceled') {
       toast.error(result.reason)

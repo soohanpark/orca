@@ -100,7 +100,8 @@ export function BrowserImportHintButton({
               value1: browser?.label ?? browserFamily,
               value2: browserProfile ? ` (${browserProfile})` : ''
             }
-          )
+          ),
+          result.profileId
         )
         return
       }
@@ -120,7 +121,8 @@ export function BrowserImportHintButton({
           'auto.components.browser.pane.BrowserImportHintButton.d40d584769',
           'Imported {{value0}} cookies from file.',
           { value0: result.summary.importedCookies }
-        )
+        ),
+        result.profileId
       )
       return
     }

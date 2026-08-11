@@ -28,7 +28,7 @@ function formatCookieImportWarning(warning: CookieImportWarning): string {
 const GOOGLE_SIGN_IN_URL = 'https://accounts.google.com/'
 
 // Why: Google binds sessions server-side to the source browser, so imported Google cookies sign out within ~1h (STA-3811); a one-time direct sign-in is the only path that sticks.
-function emitGoogleDirectSignInNotice(): void {
+function emitGoogleDirectSignInNotice(profileId: string): void {
   toast.info(
     translate(
       'auto.lib.browser.cookie.import.toast.googleDirectSignIn',
@@ -43,13 +43,14 @@ function emitGoogleDirectSignInNotice(): void {
         ),
         onClick: () => {
           const store = useAppStore.getState()
-          const worktreeId = store.activeWorktreeId
-          if (!worktreeId) {
-            return
-          }
-          // Why: the import surfaces include the Settings page, which would cover the new tab.
-          store.closeSettingsPage()
-          store.createBrowserTab(worktreeId, GOOGLE_SIGN_IN_URL, { activate: true })
+          void store
+            .openBrowserProfileTabInActiveWorkspace(GOOGLE_SIGN_IN_URL, profileId)
+            .then((opened) => {
+              if (opened) {
+                // Why: the import surfaces include the Settings page, which would cover the new tab.
+                useAppStore.getState().closeSettingsPage()
+              }
+            })
         }
       }
     }
@@ -60,7 +61,8 @@ function emitGoogleDirectSignInNotice(): void {
 // warning toast instead of reporting an unqualified success (#9355).
 export function emitBrowserCookieImportToast(
   summary: BrowserCookieImportSummary,
-  successMessage: string
+  successMessage: string,
+  profileId: string
 ): void {
   const warning = summary.warning
   if (warning) {
@@ -69,6 +71,6 @@ export function emitBrowserCookieImportToast(
     toast.success(successMessage)
   }
   if (summary.googleCookiesPresent) {
-    emitGoogleDirectSignInNotice()
+    emitGoogleDirectSignInNotice(profileId)
   }
 }
