@@ -12,7 +12,6 @@ import { basename, join, win32 } from 'node:path'
 import { ipcMain } from 'electron'
 import type {
   FolderWorkspace,
-  PreservedBranchCleanupAuthority,
   ProjectGroup,
   Tab,
   TerminalLayoutSnapshot,
@@ -141,6 +140,12 @@ const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'p
 const removeWorktreeLinkedPathsMock = vi.hoisted(() => vi.fn())
 const findExistingWorktreeSymlinkPathsMock = vi.hoisted(() => vi.fn())
 const resolveLocalGitUsernameMock = vi.hoisted(() => vi.fn(async () => ''))
+const rememberPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const resolvePreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const preservedBranchCleanupProvenance = new Map<
+  string,
+  { expectedHead: string; pushTarget: unknown }
+>()
 
 vi.mock('../ipc/worktree-symlinks', () => ({
   createWorktreeCopiedPaths: vi.fn(),
@@ -418,6 +423,11 @@ vi.mock('../git/worktree', () => ({
   addWorktree: addWorktreeMock,
   removeWorktree: removeWorktreeMock,
   forceDeleteLocalBranch: forceDeleteLocalBranchMock
+}))
+
+vi.mock('../git/preserved-branch-cleanup-provenance', () => ({
+  rememberPreservedBranchCleanupProvenance: rememberPreservedBranchCleanupProvenanceMock,
+  resolvePreservedBranchCleanupProvenance: resolvePreservedBranchCleanupProvenanceMock
 }))
 
 vi.mock('./repo-worktree-resolution-scan', () => ({
@@ -882,7 +892,34 @@ function resetRuntimeTestMocks(): void {
   updateGitLabMRReviewersMock.mockResolvedValue({ ok: true, reviewers: [] })
   getIssueMock.mockReset()
   getIssueMock.mockResolvedValue(null)
-  runtimeCleanupAuthorities.clear()
+  preservedBranchCleanupProvenance.clear()
+  rememberPreservedBranchCleanupProvenanceMock
+    .mockReset()
+    .mockImplementation(
+      async (
+        _execGit: unknown,
+        repoPath: string,
+        branchName: string,
+        expectedHead: string,
+        pushTarget: unknown
+      ) => {
+        preservedBranchCleanupProvenance.set(`${repoPath}\0${branchName}`, {
+          expectedHead,
+          pushTarget
+        })
+      }
+    )
+  resolvePreservedBranchCleanupProvenanceMock
+    .mockReset()
+    .mockImplementation(
+      async (_execGit: unknown, repoPath: string, branchName: string, expectedHead: string) => {
+        const provenance = preservedBranchCleanupProvenance.get(`${repoPath}\0${branchName}`)
+        if (provenance?.expectedHead !== expectedHead) {
+          throw new Error(`No preserved branch cleanup is pending for "${branchName}".`)
+        }
+        return provenance.pushTarget
+      }
+    )
 }
 
 beforeEach(resetRuntimeTestMocks)
@@ -1312,8 +1349,6 @@ function createStaleRuntimeWorktreeStore(
   return { runtimeStore, removeWorktreeMeta }
 }
 
-const runtimeCleanupAuthorities = new Map<string, PreservedBranchCleanupAuthority>()
-
 const store = {
   getRepo: (id: string) => store.getRepos().find((repo) => repo.id === id),
   getRepos: () => [
@@ -1354,14 +1389,6 @@ const store = {
       ...meta
     }) as never,
   removeWorktreeMeta: () => {},
-  getPreservedBranchCleanupAuthority: (worktreeId: string, hostId?: string) =>
-    runtimeCleanupAuthorities.get(`${hostId ?? ''}\0${worktreeId}`),
-  setPreservedBranchCleanupAuthority: (authority: PreservedBranchCleanupAuthority) => {
-    runtimeCleanupAuthorities.set(`${authority.hostId ?? ''}\0${authority.worktreeId}`, authority)
-  },
-  removePreservedBranchCleanupAuthority: (worktreeId: string, hostId?: string) => {
-    runtimeCleanupAuthorities.delete(`${hostId ?? ''}\0${worktreeId}`)
-  },
   getSparsePresets: () => [],
   saveSparsePreset: (preset: unknown) => preset as never,
   getGitHubCache: () => undefined as never,
@@ -46773,19 +46800,18 @@ describe('OrcaRuntimeService', () => {
     }))
     const cleanupLifecycle = runtime as unknown as {
       rememberPreservedBranchCleanupTarget: (
-        worktreeId: string,
-        hostId: undefined,
+        execGit: (args: string[], cwd: string) => Promise<{ stdout: string }>,
+        repoPath: string,
         result: { preservedBranch: { branchName: string; head: string } },
         fallbackHead: undefined,
         pushTarget: undefined
-      ) => void
-      releasePreservedBranchCleanups?: (items: typeof cleanups) => void
+      ) => Promise<void>
     }
 
     for (const cleanup of cleanups) {
-      cleanupLifecycle.rememberPreservedBranchCleanupTarget(
-        cleanup.worktreeId,
-        undefined,
+      await cleanupLifecycle.rememberPreservedBranchCleanupTarget(
+        vi.fn(),
+        TEST_REPO_PATH,
         { preservedBranch: { branchName: cleanup.branchName, head: cleanup.expectedHead } },
         undefined,
         undefined
@@ -46793,16 +46819,7 @@ describe('OrcaRuntimeService', () => {
     }
 
     expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(runtimeCleanupAuthorities.size).toBe(8)
-    runtime.releasePreservedBranchCleanups(
-      cleanups.slice(0, -1).map((cleanup) => ({
-        worktreeSelector: `id:${cleanup.worktreeId}`,
-        branchName: cleanup.branchName,
-        expectedHead: cleanup.expectedHead
-      }))
-    )
-    expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(runtimeCleanupAuthorities.size).toBe(1)
+    expect(rememberPreservedBranchCleanupProvenanceMock).toHaveBeenCalledTimes(8)
 
     const pending = cleanups.at(-1)!
     await runtime.forceDeletePreservedBranch(
@@ -46816,7 +46833,12 @@ describe('OrcaRuntimeService', () => {
       pending.expectedHead
     )
     expect(runtime.getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(runtimeCleanupAuthorities.size).toBe(0)
+    expect(resolvePreservedBranchCleanupProvenanceMock).toHaveBeenCalledWith(
+      expect.any(Function),
+      TEST_REPO_PATH,
+      pending.branchName,
+      pending.expectedHead
+    )
   })
 
   it('force-deletes an SSH branch that was preserved by runtime worktree removal', async () => {
@@ -46887,6 +46909,57 @@ describe('OrcaRuntimeService', () => {
       expect(forceDeleteLocalBranchMock).not.toHaveBeenCalled()
     } finally {
       unregisterSshGitProvider('ssh-1')
+    }
+  })
+
+  it('selects the exact runtime host when repos share an id', async () => {
+    const localRepo = store.getRepos()[0]!
+    const remoteRepo = {
+      ...localRepo,
+      path: '/remote/repo',
+      displayName: 'remote',
+      connectionId: 'ssh-shared'
+    }
+    const runtimeStore = {
+      ...store,
+      getRepos: () => [localRepo, remoteRepo],
+      getRepo: () => localRepo
+    }
+    const provider = {
+      exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
+      forceDeletePreservedBranch: vi.fn().mockResolvedValue(undefined)
+    }
+    registerSshGitProvider('ssh-shared', provider as never)
+    await rememberPreservedBranchCleanupProvenanceMock(
+      undefined,
+      remoteRepo.path,
+      'feature/shared',
+      'shared-head',
+      undefined
+    )
+    const runtime = createWorktreeRemovalRuntime(runtimeStore)
+
+    try {
+      await expect(
+        runtime.forceDeletePreservedBranch(TEST_WORKTREE_ID, 'feature/shared', 'shared-head')
+      ).rejects.toThrow('repo_not_found')
+      await expect(
+        runtime.forceDeletePreservedBranch(
+          TEST_WORKTREE_ID,
+          'feature/shared',
+          'shared-head',
+          'ssh:ssh-shared'
+        )
+      ).resolves.toEqual({ deleted: true })
+
+      expect(provider.forceDeletePreservedBranch).toHaveBeenCalledWith(
+        remoteRepo.path,
+        'feature/shared',
+        'shared-head'
+      )
+      expect(forceDeleteLocalBranchMock).not.toHaveBeenCalled()
+    } finally {
+      unregisterSshGitProvider('ssh-shared')
     }
   })
 

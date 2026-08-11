@@ -821,9 +821,6 @@ const api = {
     forceDeletePreservedBranch: (args) =>
       ipcRenderer.invoke('worktrees:forceDeletePreservedBranch', args),
 
-    releasePreservedBranchCleanups: (args) =>
-      ipcRenderer.invoke('worktrees:releasePreservedBranchCleanups', args),
-
     updateMeta: (args) => ipcRenderer.invoke('worktrees:updateMeta', args),
 
     listLineage: () => ipcRenderer.invoke('worktrees:listLineage'),

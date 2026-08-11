@@ -1868,26 +1868,6 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         expectedHead,
         ...(hostId ? { hostId } : {})
       }),
-    releasePreservedBranchCleanups: async ({ cleanups }) => {
-      const response = await callRuntimeEnvelope<{ released: number }>(
-        'worktree.releasePreservedBranchCleanups',
-        {
-          cleanups: cleanups.map((cleanup) => ({
-            worktree: toRuntimeWorktreeSelector(cleanup.worktreeId),
-            branchName: cleanup.branchName,
-            expectedHead: cleanup.expectedHead,
-            ...(cleanup.hostId ? { hostId: cleanup.hostId } : {})
-          }))
-        }
-      )
-      if (!response.ok) {
-        if (response.error.code === 'method_not_found') {
-          return { released: 0 }
-        }
-        throw new Error(response.error.message)
-      }
-      return response.result
-    },
     updateMeta: async ({ worktreeId, updates }) => {
       const rpcUpdates =
         Object.hasOwn(updates, 'pushTarget') && updates.pushTarget === undefined

@@ -57,7 +57,6 @@ import type {
   FolderWorkspace,
   SparsePreset,
   PersistedMobileClientTabSelections,
-  PreservedBranchCleanupAuthority,
   WorktreeMeta,
   WorktreeLineage,
   WorkspaceLineage,
@@ -75,8 +74,6 @@ import type {
   WorkspaceSessionPatch,
   WorkspaceSessionState
 } from '../shared/types'
-import { preservedBranchCleanupScopeKey } from '../shared/preserved-branch-cleanup'
-import { assertGitPushTargetShape } from '../shared/git-push-target-validation'
 import {
   deriveGlobalWindowsRuntimeDefaultFromLegacySettings,
   normalizeProjectRuntimePreference
@@ -5458,69 +5455,6 @@ export class Store {
   }
 
   // ── Worktree Meta ──────────────────────────────────────────────────
-
-  getPreservedBranchCleanupAuthority(
-    worktreeId: string,
-    hostId?: ExecutionHostId
-  ): PreservedBranchCleanupAuthority | undefined {
-    const authorities = this.state.preservedBranchCleanupAuthorities
-    if (!authorities || typeof authorities !== 'object' || Array.isArray(authorities)) {
-      return undefined
-    }
-    const authority = authorities[preservedBranchCleanupScopeKey({ worktreeId, hostId })]
-    if (
-      !authority ||
-      authority.worktreeId !== worktreeId ||
-      authority.hostId !== hostId ||
-      typeof authority.branchName !== 'string' ||
-      typeof authority.expectedHead !== 'string'
-    ) {
-      return undefined
-    }
-    if (authority.pushTarget) {
-      try {
-        assertGitPushTargetShape(authority.pushTarget)
-      } catch {
-        return { ...authority, pushTarget: undefined }
-      }
-    }
-    return authority
-  }
-
-  setPreservedBranchCleanupAuthority(authority: PreservedBranchCleanupAuthority): void {
-    if (
-      !this.state.preservedBranchCleanupAuthorities ||
-      typeof this.state.preservedBranchCleanupAuthorities !== 'object' ||
-      Array.isArray(this.state.preservedBranchCleanupAuthorities)
-    ) {
-      this.state.preservedBranchCleanupAuthorities = {}
-    }
-    this.state.preservedBranchCleanupAuthorities[preservedBranchCleanupScopeKey(authority)] =
-      authority
-    this.scheduleSave()
-  }
-
-  removePreservedBranchCleanupAuthority(worktreeId: string, hostId?: ExecutionHostId): void {
-    const authorities = this.state.preservedBranchCleanupAuthorities
-    if (!authorities || typeof authorities !== 'object' || Array.isArray(authorities)) {
-      return
-    }
-    delete authorities[preservedBranchCleanupScopeKey({ worktreeId, hostId })]
-    this.scheduleSave()
-  }
-
-  removePreservedBranchCleanupAuthoritiesForWorktree(worktreeId: string): void {
-    const authorities = this.state.preservedBranchCleanupAuthorities
-    if (!authorities || typeof authorities !== 'object' || Array.isArray(authorities)) {
-      return
-    }
-    for (const [key, authority] of Object.entries(authorities)) {
-      if (authority.worktreeId === worktreeId) {
-        delete authorities[key]
-      }
-    }
-    this.scheduleSave()
-  }
 
   getWorktreeMeta(worktreeId: string): WorktreeMeta | undefined {
     return this.state.worktreeMeta[worktreeId]

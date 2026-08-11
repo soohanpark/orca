@@ -74,6 +74,11 @@ import {
   removeWorktree
 } from '../git/worktree'
 import { gitExecFileAsync } from '../git/runner'
+import {
+  rememberPreservedBranchCleanupProvenance,
+  resolvePreservedBranchCleanupProvenance,
+  type PreservedBranchCleanupGitExec
+} from '../git/preserved-branch-cleanup-provenance'
 import { withWorktreeRemoveStageSpan, withWorktreeSpan } from '../observability/instrumentation'
 import { resolveGitHubPrStartPoint } from '../github/pr-start-point'
 import {
@@ -142,7 +147,6 @@ import {
   registerSshProviderRequestAbort
 } from '../ssh/ssh-provider-authority'
 import { createSenderScopedRequestCancellations } from './sender-scoped-request-cancellation'
-import type { PreservedBranchCleanup } from '../../shared/preserved-branch-cleanup'
 
 type CreateWorktreeArgsWithSystemProvenance = CreateWorktreeArgs & {
   automationProvenance?: AutomationWorkspaceProvenance
@@ -522,14 +526,6 @@ type WorktreeRemovalInFlight = {
   promise: Promise<RemoveWorktreeResult>
 }
 
-type PreservedBranchCleanupTarget = {
-  worktreeId: string
-  hostId: ExecutionHostId
-  branchName: string
-  head: string
-  pushTarget?: GitPushTarget
-}
-
 export function getPreservedBranchCleanupTargetCountForTests(): number {
   return 0
 }
@@ -538,14 +534,13 @@ export function resetPreservedBranchCleanupTargetsForTests(): void {
   // Compatibility probe: the process-local registry was removed.
 }
 
-function rememberPreservedBranchCleanupTarget(
-  store: Store,
-  worktreeId: string,
-  hostId: ExecutionHostId,
+async function rememberPreservedBranchCleanupTarget(
+  execGit: PreservedBranchCleanupGitExec,
+  repoPath: string,
   result: RemoveWorktreeResult | undefined,
   fallbackHead: string | undefined,
   pushTarget: GitPushTarget | undefined
-): void {
+): Promise<void> {
   if (result?.preservedBranch) {
     const head = result.preservedBranch.head ?? fallbackHead
     if (!head) {
@@ -553,16 +548,14 @@ function rememberPreservedBranchCleanupTarget(
         `Cannot safely offer force-delete for preserved branch "${result.preservedBranch.branchName}" without its saved commit.`
       )
     }
-    store.setPreservedBranchCleanupAuthority({
-      worktreeId,
-      hostId,
-      branchName: result.preservedBranch.branchName,
-      expectedHead: head,
-      ...(pushTarget ? { pushTarget } : {})
-    })
-    return
+    await rememberPreservedBranchCleanupProvenance(
+      execGit,
+      repoPath,
+      result.preservedBranch.branchName,
+      head,
+      pushTarget
+    )
   }
-  store.removePreservedBranchCleanupAuthority(worktreeId, hostId)
 }
 
 function preserveBranchHeadFallback(
@@ -579,43 +572,6 @@ function preserveBranchHeadFallback(
       head: fallbackHead
     }
   }
-}
-
-function getPreservedBranchCleanupTarget(
-  store: Store,
-  worktreeId: string,
-  branchName: string,
-  expectedHead: string,
-  hostId?: ExecutionHostId
-): PreservedBranchCleanupTarget {
-  const target = store.getPreservedBranchCleanupAuthority(
-    worktreeId,
-    hostId ?? LOCAL_EXECUTION_HOST_ID
-  )
-  if (!target?.hostId || target.branchName !== branchName || target.expectedHead !== expectedHead) {
-    throw new Error(`No preserved branch cleanup is pending for "${branchName}".`)
-  }
-  return { ...target, hostId: target.hostId, head: target.expectedHead }
-}
-
-function releasePreservedBranchCleanupTargets(
-  store: Store,
-  cleanups: readonly PreservedBranchCleanup[]
-): number {
-  let released = 0
-  for (const cleanup of cleanups) {
-    if (!cleanup.expectedHead) {
-      continue
-    }
-    const hostId = cleanup.hostId ?? LOCAL_EXECUTION_HOST_ID
-    const target = store.getPreservedBranchCleanupAuthority(cleanup.worktreeId, hostId)
-    if (target?.branchName !== cleanup.branchName || target.expectedHead !== cleanup.expectedHead) {
-      continue
-    }
-    store.removePreservedBranchCleanupAuthority(cleanup.worktreeId, hostId)
-    released += 1
-  }
-  return released
 }
 
 const loggedUnavailableSshGitProviders = new Set<string>()
@@ -1842,7 +1798,6 @@ export function registerWorktreeHandlers(
   ipcMain.removeHandler('worktrees:remove')
   ipcMain.removeHandler('worktrees:forgetLocal')
   ipcMain.removeHandler('worktrees:forceDeletePreservedBranch')
-  ipcMain.removeHandler('worktrees:releasePreservedBranchCleanups')
   ipcMain.removeHandler('worktrees:updateMeta')
   ipcMain.removeHandler('worktrees:listLineage')
   ipcMain.removeHandler('worktrees:listLineageForHost')
@@ -2440,7 +2395,6 @@ export function registerWorktreeHandlers(
             await withWorktreeRemoveStageSpan('metadata_purge', 'folder', async () => {
               removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
             })
-            store.removePreservedBranchCleanupAuthority(args.worktreeId, removalHostId)
             notifyWorktreesChanged(mainWindow, repoId)
             return {}
           }
@@ -2549,7 +2503,6 @@ export function registerWorktreeHandlers(
               }
               runtime.clearOptimisticReconcileToken(args.worktreeId)
               removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
-              store.removePreservedBranchCleanupAuthority(args.worktreeId, removalHostId)
               notifyWorktreesChanged(mainWindow, repoId)
               return {}
             }
@@ -2594,7 +2547,6 @@ export function registerWorktreeHandlers(
                 )
                 runtime.clearOptimisticReconcileToken(args.worktreeId)
                 removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
-                store.removePreservedBranchCleanupAuthority(args.worktreeId, removalHostId)
                 invalidateAuthorizedRootsCache()
                 notifyWorktreesChanged(mainWindow, repoId)
                 return {}
@@ -2626,7 +2578,6 @@ export function registerWorktreeHandlers(
               }
               runtime.clearOptimisticReconcileToken(args.worktreeId)
               removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
-              store.removePreservedBranchCleanupAuthority(args.worktreeId, removalHostId)
               notifyWorktreesChanged(mainWindow, repoId)
               return {}
             }
@@ -2672,10 +2623,9 @@ export function registerWorktreeHandlers(
               store,
               localWorktreeGitOptions
             )
-            rememberPreservedBranchCleanupTarget(
-              store,
-              args.worktreeId,
-              removalHostId,
+            await rememberPreservedBranchCleanupTarget(
+              (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions }),
+              repo.path,
               removalResult,
               registeredWorktree.head,
               removedPushTarget
@@ -2771,10 +2721,9 @@ export function registerWorktreeHandlers(
               removedPushTarget,
               store
             )
-            rememberPreservedBranchCleanupTarget(
-              store,
-              args.worktreeId,
-              removalHostId,
+            await rememberPreservedBranchCleanupTarget(
+              (argv, cwd) => provider!.exec(argv, cwd),
+              repo.path,
               removalResult,
               registeredWorktree.head,
               removedPushTarget
@@ -2928,7 +2877,6 @@ export function registerWorktreeHandlers(
                 )
                 runtime.clearOptimisticReconcileToken(args.worktreeId)
                 removeWorktreeMetadataAndTransientState(store, args.worktreeId, removalHostId)
-                store.removePreservedBranchCleanupAuthority(args.worktreeId, removalHostId)
                 invalidateAuthorizedRootsCache()
                 notifyWorktreesChanged(mainWindow, repoId)
                 removalCompleted = true
@@ -2950,10 +2898,9 @@ export function registerWorktreeHandlers(
             store,
             localWorktreeGitOptions
           )
-          rememberPreservedBranchCleanupTarget(
-            store,
-            args.worktreeId,
-            removalHostId,
+          await rememberPreservedBranchCleanupTarget(
+            (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions }),
+            repo.path,
             removalResult,
             refreshedRegisteredWorktree.head,
             removedPushTarget
@@ -3057,11 +3004,6 @@ export function registerWorktreeHandlers(
         removeWorktreeMetadataAndTransientState(store, args.worktreeId, ownerHost?.id)
         // Why: cached roots outlive the forgotten workspace, so an ownerless path stays filesystem-authorized until a rebuild.
         invalidateAuthorizedRootsCache()
-        if (ownerHost?.id) {
-          store.removePreservedBranchCleanupAuthority(args.worktreeId, ownerHost.id)
-        } else {
-          store.removePreservedBranchCleanupAuthoritiesForWorktree(args.worktreeId)
-        }
         notifyWorktreesChanged(mainWindow, repoId)
         return {}
       })()
@@ -3093,14 +3035,7 @@ export function registerWorktreeHandlers(
         : getRepoForWorktreeRemoval(store, repoId, undefined)
       const authorityHostId =
         args.hostId ?? (unqualifiedRepo ? getRepoExecutionHostId(unqualifiedRepo) : undefined)
-      const cleanupTarget = getPreservedBranchCleanupTarget(
-        store,
-        args.worktreeId,
-        args.branchName,
-        args.expectedHead,
-        authorityHostId
-      )
-      const repo = getRepoForWorktreeRemoval(store, repoId, cleanupTarget.hostId)
+      const repo = getRepoForWorktreeRemoval(store, repoId, authorityHostId)
       if (!repo) {
         throw new Error(`Repo not found: ${repoId}`)
       }
@@ -3110,52 +3045,46 @@ export function registerWorktreeHandlers(
 
       if (repo.connectionId) {
         const provider = requireSshGitProvider(repo.connectionId)
-        // Why: SSH needs the write-capable relay RPC; the read-only git.exec allowlist rejects these worktree/update-ref/config writes.
-        await provider.forceDeletePreservedBranch(
+        const pushTarget = await resolvePreservedBranchCleanupProvenance(
+          (argv, cwd) => provider.exec(argv, cwd),
           repo.path,
-          cleanupTarget.branchName,
-          cleanupTarget.head
+          args.branchName,
+          args.expectedHead
         )
+        // Why: SSH needs the write-capable relay RPC; the read-only git.exec allowlist rejects these worktree/update-ref/config writes.
+        await provider.forceDeletePreservedBranch(repo.path, args.branchName, args.expectedHead)
         await cleanupUnusedWorktreePushTargetRemoteSsh(
           provider,
           repo.path,
           args.worktreeId,
-          cleanupTarget.pushTarget,
+          pushTarget,
           store
         )
       } else {
         const localWorktreeGitOptions = getLocalProjectWorktreeGitOptions(store, repo)
         const hasLocalWorktreeGitOptions = Object.keys(localWorktreeGitOptions).length > 0
+        const execGit: PreservedBranchCleanupGitExec = (argv, cwd) =>
+          gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
+        const pushTarget = await resolvePreservedBranchCleanupProvenance(
+          execGit,
+          repo.path,
+          args.branchName,
+          args.expectedHead
+        )
         await (hasLocalWorktreeGitOptions
-          ? forceDeleteLocalBranch(
-              repo.path,
-              cleanupTarget.branchName,
-              cleanupTarget.head,
-              (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
-            )
-          : forceDeleteLocalBranch(repo.path, cleanupTarget.branchName, cleanupTarget.head))
+          ? forceDeleteLocalBranch(repo.path, args.branchName, args.expectedHead, execGit)
+          : forceDeleteLocalBranch(repo.path, args.branchName, args.expectedHead))
         await cleanupUnusedWorktreePushTargetRemote(
           repo.path,
           args.worktreeId,
-          cleanupTarget.pushTarget,
+          pushTarget,
           store,
           localWorktreeGitOptions
         )
       }
 
-      store.removePreservedBranchCleanupAuthority(args.worktreeId, cleanupTarget.hostId)
       return { deleted: true }
     }
-  )
-
-  ipcMain.handle(
-    'worktrees:releasePreservedBranchCleanups',
-    (_event, args: { cleanups?: PreservedBranchCleanup[] }): { released: number } => ({
-      released: releasePreservedBranchCleanupTargets(
-        store,
-        Array.isArray(args?.cleanups) ? args.cleanups : []
-      )
-    })
   )
 
   ipcMain.handle(

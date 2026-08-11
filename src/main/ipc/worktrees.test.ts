@@ -12,6 +12,12 @@ import * as localWorktreeFilesystem from '../local-worktree-filesystem'
 const ORIGINAL_PLATFORM = process.platform
 const removeWorktreeLinkedPathsMock = vi.hoisted(() => vi.fn())
 const findExistingWorktreeSymlinkPathsMock = vi.hoisted(() => vi.fn())
+const rememberPreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const resolvePreservedBranchCleanupProvenanceMock = vi.hoisted(() => vi.fn())
+const preservedBranchCleanupProvenance = new Map<
+  string,
+  { expectedHead: string; pushTarget: unknown }
+>()
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', {
@@ -134,6 +140,11 @@ vi.mock('../git/worktree', () => ({
 vi.mock('../git/runner', () => ({
   gitExecFileAsync: gitExecFileAsyncMock,
   gitExecFileSync: vi.fn()
+}))
+
+vi.mock('../git/preserved-branch-cleanup-provenance', () => ({
+  rememberPreservedBranchCleanupProvenance: rememberPreservedBranchCleanupProvenanceMock,
+  resolvePreservedBranchCleanupProvenance: resolvePreservedBranchCleanupProvenanceMock
 }))
 
 vi.mock('../git/repo', () => ({
@@ -295,7 +306,6 @@ type HandlerMap = Record<string, (_event: unknown, args: unknown) => unknown>
 
 describe('registerWorktreeHandlers', () => {
   const handlers: HandlerMap = {}
-  const cleanupAuthorities = new Map<string, Record<string, unknown>>()
   const mainWindow = {
     isDestroyed: () => false,
     webContents: {
@@ -319,25 +329,7 @@ describe('registerWorktreeHandlers', () => {
     removeWorktreeLineage: vi.fn(),
     getAllWorkspaceLineage: vi.fn(),
     getFolderWorkspaces: vi.fn(),
-    getProjectGroups: vi.fn(),
-    getPreservedBranchCleanupAuthority: vi.fn((worktreeId: string, hostId?: string) =>
-      cleanupAuthorities.get(`${hostId ?? ''}\0${worktreeId}`)
-    ),
-    setPreservedBranchCleanupAuthority: vi.fn(
-      (authority: { worktreeId: string; hostId?: string }) => {
-        cleanupAuthorities.set(`${authority.hostId ?? ''}\0${authority.worktreeId}`, authority)
-      }
-    ),
-    removePreservedBranchCleanupAuthority: vi.fn((worktreeId: string, hostId?: string) => {
-      cleanupAuthorities.delete(`${hostId ?? ''}\0${worktreeId}`)
-    }),
-    removePreservedBranchCleanupAuthoritiesForWorktree: vi.fn((worktreeId: string) => {
-      for (const [key, authority] of cleanupAuthorities) {
-        if (authority.worktreeId === worktreeId) {
-          cleanupAuthorities.delete(key)
-        }
-      }
-    })
+    getProjectGroups: vi.fn()
   }
   let runtimeStub: {
     resolveRemoteTrackingBase: ReturnType<typeof vi.fn>
@@ -364,7 +356,34 @@ describe('registerWorktreeHandlers', () => {
     __resetSshWorktreeCreateFetchCacheForTests()
     __resetDetectedWorktreeScanCacheForTests()
     resetPreservedBranchCleanupTargetsForTests()
-    cleanupAuthorities.clear()
+    preservedBranchCleanupProvenance.clear()
+    rememberPreservedBranchCleanupProvenanceMock
+      .mockReset()
+      .mockImplementation(
+        async (
+          _execGit: unknown,
+          repoPath: string,
+          branchName: string,
+          expectedHead: string,
+          pushTarget: unknown
+        ) => {
+          preservedBranchCleanupProvenance.set(`${repoPath}\0${branchName}`, {
+            expectedHead,
+            pushTarget
+          })
+        }
+      )
+    resolvePreservedBranchCleanupProvenanceMock
+      .mockReset()
+      .mockImplementation(
+        async (_execGit: unknown, repoPath: string, branchName: string, expectedHead: string) => {
+          const provenance = preservedBranchCleanupProvenance.get(`${repoPath}\0${branchName}`)
+          if (provenance?.expectedHead !== expectedHead) {
+            throw new Error(`No preserved branch cleanup is pending for "${branchName}".`)
+          }
+          return provenance.pushTarget
+        }
+      )
     resetSshProviderAuthorities()
     invalidateAuthorizedRootsCache()
     for (const m of [
@@ -9594,12 +9613,7 @@ describe('registerWorktreeHandlers', () => {
     }
 
     expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(cleanupAuthorities.size).toBe(8)
-    await handlers['worktrees:releasePreservedBranchCleanups']?.(null, {
-      cleanups: cleanups.slice(0, -1)
-    })
-    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(cleanupAuthorities.size).toBe(1)
+    expect(rememberPreservedBranchCleanupProvenanceMock).toHaveBeenCalledTimes(8)
 
     const pending = cleanups.at(-1)!
     await handlers['worktrees:forceDeletePreservedBranch'](null, pending)
@@ -9609,7 +9623,12 @@ describe('registerWorktreeHandlers', () => {
       pending.expectedHead
     )
     expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(cleanupAuthorities.size).toBe(0)
+    expect(resolvePreservedBranchCleanupProvenanceMock).toHaveBeenCalledWith(
+      expect.any(Function),
+      '/workspace/repo',
+      pending.branchName,
+      pending.expectedHead
+    )
   })
 
   it('keeps old-client authority durable without growing new-host process routing', async () => {
@@ -9629,7 +9648,7 @@ describe('registerWorktreeHandlers', () => {
     }
 
     expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
-    expect(cleanupAuthorities.size).toBe(8)
+    expect(rememberPreservedBranchCleanupProvenanceMock).toHaveBeenCalledTimes(8)
 
     const pending = cleanups.at(-1)!
     await handlers['worktrees:forceDeletePreservedBranch'](null, pending)
@@ -9638,7 +9657,7 @@ describe('registerWorktreeHandlers', () => {
       pending.branchName,
       pending.expectedHead
     )
-    expect(cleanupAuthorities.size).toBe(7)
+    expect(getPreservedBranchCleanupTargetCountForTests()).toBe(0)
   })
 
   it('force-deletes an SSH branch that was preserved by safe worktree removal', async () => {
@@ -9693,6 +9712,58 @@ describe('registerWorktreeHandlers', () => {
       '/remote/repo',
       'feature/test',
       'def456'
+    )
+    expect(forceDeleteLocalBranchMock).not.toHaveBeenCalled()
+  })
+
+  it('selects the exact host when local and SSH repos share an id', async () => {
+    const localRepo = {
+      id: 'repo-shared',
+      path: '/workspace/repo',
+      displayName: 'local',
+      badgeColor: '#000',
+      addedAt: 0
+    }
+    const remoteRepo = {
+      ...localRepo,
+      path: '/remote/repo',
+      displayName: 'remote',
+      connectionId: 'conn-shared'
+    }
+    const provider = {
+      exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
+      forceDeletePreservedBranch: vi.fn().mockResolvedValue(undefined)
+    }
+    store.getRepos.mockReturnValue([localRepo, remoteRepo])
+    store.getRepo.mockReturnValue(localRepo)
+    getSshGitProviderMock.mockReturnValue(provider)
+    await rememberPreservedBranchCleanupProvenanceMock(
+      undefined,
+      remoteRepo.path,
+      'feature/shared',
+      'shared-head',
+      undefined
+    )
+    const cleanup = {
+      worktreeId: 'repo-shared::/same/path',
+      branchName: 'feature/shared',
+      expectedHead: 'shared-head'
+    }
+
+    await expect(handlers['worktrees:forceDeletePreservedBranch'](null, cleanup)).rejects.toThrow(
+      'Repo not found'
+    )
+    await expect(
+      handlers['worktrees:forceDeletePreservedBranch'](null, {
+        ...cleanup,
+        hostId: toSshExecutionHostId('conn-shared')
+      })
+    ).resolves.toEqual({ deleted: true })
+
+    expect(provider.forceDeletePreservedBranch).toHaveBeenCalledWith(
+      remoteRepo.path,
+      cleanup.branchName,
+      cleanup.expectedHead
     )
     expect(forceDeleteLocalBranchMock).not.toHaveBeenCalled()
   })

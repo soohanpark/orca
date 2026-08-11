@@ -119,7 +119,6 @@ import {
   type DetectedWorktreeRefreshLease
 } from './detected-worktree-refresh-leases'
 import { getTerminalActivationSpawnSuppression } from './terminal-activation-spawn-suppression'
-import type { PreservedBranchCleanup } from '../../../../shared/preserved-branch-cleanup'
 import type {
   HostQualifiedDetectedWorktreeResult,
   HostQualifiedKnownWorktreeResult,
@@ -4611,23 +4610,14 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           }
         : null
       if (preservedBranch && options?.suppressPreservedBranchToast !== true) {
-        showPreservedBranchToast(
-          removalResult,
-          worktreeBeforeRemoval,
-          (branch, expectedHead) => {
-            void get().forceDeletePreservedBranch(worktreeId, branch, expectedHead, {
-              ...(hostId ? { hostId } : {}),
-              ...(removalRoute?.runtimeEnvironmentId
-                ? { runtimeEnvironmentId: removalRoute.runtimeEnvironmentId }
-                : {})
-            })
-          },
-          () => {
-            if (cleanup) {
-              void get().releasePreservedBranchCleanups([cleanup])
-            }
-          }
-        )
+        showPreservedBranchToast(removalResult, worktreeBeforeRemoval, (branch, expectedHead) => {
+          void get().forceDeletePreservedBranch(worktreeId, branch, expectedHead, {
+            ...(hostId ? { hostId } : {}),
+            ...(removalRoute?.runtimeEnvironmentId
+              ? { runtimeEnvironmentId: removalRoute.runtimeEnvironmentId }
+              : {})
+          })
+        })
       }
       pruneHostedReviewLinkMutationGenerations([worktreeId])
       return preservedBranch && cleanup
@@ -4766,56 +4756,6 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       }
       return { ok: false as const, error }
     }
-  },
-
-  releasePreservedBranchCleanups: async (cleanups) => {
-    const releasesByTarget = new Map<
-      string,
-      {
-        target: ReturnType<typeof getActiveRuntimeTarget>
-        cleanups: PreservedBranchCleanup[]
-      }
-    >()
-    for (const cleanup of cleanups) {
-      const target = cleanup.runtimeEnvironmentId
-        ? { kind: 'environment' as const, environmentId: cleanup.runtimeEnvironmentId }
-        : { kind: 'local' as const }
-      const targetKey = target.kind === 'local' ? 'local' : `environment:${target.environmentId}`
-      const group = releasesByTarget.get(targetKey) ?? {
-        target,
-        cleanups: []
-      }
-      group.cleanups.push(cleanup)
-      releasesByTarget.set(targetKey, group)
-    }
-
-    await Promise.all(
-      [...releasesByTarget.values()].map(async ({ target, cleanups: targetCleanups }) => {
-        try {
-          await (target.kind === 'local'
-            ? window.api.worktrees.releasePreservedBranchCleanups({
-                cleanups: targetCleanups
-              })
-            : callRuntimeRpc(
-                target,
-                'worktree.releasePreservedBranchCleanups',
-                {
-                  cleanups: targetCleanups.map((cleanup) => ({
-                    worktree: toRuntimeWorktreeSelector(cleanup.worktreeId),
-                    branchName: cleanup.branchName,
-                    expectedHead: cleanup.expectedHead,
-                    ...(cleanup.hostId ? { hostId: cleanup.hostId } : {})
-                  }))
-                },
-                { timeoutMs: 15_000 }
-              ))
-        } catch (error) {
-          if (!(error instanceof RuntimeRpcCallError) || error.code !== 'method_not_found') {
-            console.warn('Failed to release preserved branch cleanup authority:', error)
-          }
-        }
-      })
-    )
   },
 
   clearWorktreeDeleteState: (worktreeId) => {

@@ -12,7 +12,7 @@
   "gates": [
     {
       "id": "worktree.preserved-branch-cleanup-authority-lifecycle",
-      "title": "Preserved-branch review completion reclaims process routing without losing cleanup authority",
+      "title": "Preserved-branch cleanup reconstructs authority without process routing retention",
       "maturity": "experimental",
       "protection": "partial",
       "owner": "worktree-runtime",
@@ -27,45 +27,55 @@
       "providers": ["local", "ssh", "paired-runtime"],
       "coveredPlatforms": ["macos"],
       "coveredProviders": ["local", "ssh", "paired-runtime"],
-      "coverageNotes": "Deterministic renderer, IPC, runtime, persistence, RPC, toast, and modal contracts cover local, direct-SSH, paired-runtime, nested-host, folder-workspace rejection, repeated unique completion, exact pending force-delete authority, restart durability, malformed persisted provenance, and both mixed-version directions. New clients tolerate method_not_found from old hosts, but an old host retains its historical in-memory map until that host updates or restarts.",
+      "coverageNotes": "Deterministic renderer, IPC, runtime, workspace-cleanup, and real-Git contracts cover local, direct-SSH, paired-runtime, nested-host, repeated unique completion, exact pending force-delete authority, stale-head rejection, Git-owned restart durability, per-remote ownership markers, and both mixed-version directions without adding a wire method.",
       "motivatingLinks": [
         "https://linear.app/stably/issue/STA-3926/p2daily-14181-preserved-branch-cleanup-maps-retain-dismissed-entries",
         "https://github.com/stablyai/orca/pull/13693"
       ],
-      "invariant": "Once a preserved-branch review is dismissed, kept, or otherwise completed, renderer, desktop IPC, and runtime retain zero process-local routing records for it. A pending force-delete retains exact worktree, host, runtime, branch, expected-head, and push-target authority across restart; completed or successfully deleted entries release durable authority, while failed deletes remain retryable.",
-      "oracle": "Create eight uniquely keyed preserved-branch reviews through each ownership path and require process route cardinality to remain zero after creation and completion. Release seven, force-delete the eighth, and require exact host/runtime/push-target routing plus zero remaining authority. Simulate an old client that never releases against a new host and require zero process routes with durable force-delete authority; simulate a new client against an old runtime and require method_not_found to be tolerated without retaining renderer routing.",
+      "invariant": "Renderer, desktop IPC, and runtime retain zero process-local routing records after preserved-branch removal or review completion. A still-pending force-delete uses the request's exact host/runtime authority and reconstructs expected-head and push-target provenance from branch-scoped Git config; Orca-created ownership is bounded to one marker per actual remote and branch deletion removes branch-scoped provenance.",
+      "oracle": "Create eight uniquely keyed preserved-branch reviews through each ownership path and require process route cardinality to stay zero. Force-delete a pending review and require exact host/runtime selection, expected-head validation, and push-target reconstruction; reject stale or missing Git authority. Exercise old-client/new-host by omitting completion release entirely and new-client/old-host by using only the pre-existing remove and force-delete wire methods.",
       "commands": [
-        "pnpm exec vitest run --config config/vitest.config.ts src/renderer/src/store/slices/worktrees.test.ts src/main/ipc/worktrees.test.ts src/main/runtime/orca-runtime.test.ts --reporter=dot",
-        "pnpm exec vitest run --config config/vitest.config.ts src/main/persistence.test.ts src/main/ipc/worktrees.test.ts src/main/runtime/orca-runtime.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/components/sidebar/preserved-branch-batch-toast.test.tsx src/renderer/src/components/sidebar/preserved-branch-toast.test.tsx --reporter=dot"
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktrees.test.ts src/main/runtime/orca-runtime.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot"
       ],
       "testFiles": [
-        "src/main/persistence.test.ts",
+        "src/main/git/preserved-branch-cleanup-provenance.test.ts",
         "src/main/ipc/worktrees.test.ts",
         "src/main/runtime/orca-runtime.test.ts",
         "src/renderer/src/store/slices/worktrees.test.ts",
-        "src/renderer/src/components/sidebar/preserved-branch-batch-toast.test.tsx",
-        "src/renderer/src/components/sidebar/preserved-branch-toast.test.tsx"
+        "src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts"
       ],
       "assertionRefs": [
         {
           "file": "src/renderer/src/store/slices/worktrees.test.ts",
           "assertions": [
             "eight unique completed reviews retain zero renderer route keys",
-            "new-client release tolerates old-runtime method_not_found"
+            "direct-SSH and nested-runtime force-delete preserve exact routing"
           ]
         },
         {
           "file": "src/main/ipc/worktrees.test.ts",
           "assertions": [
-            "completed desktop reviews retain zero process routes and release durable authority",
-            "old-client removal retains exact durable force-delete authority without process routing"
+            "old-client removals retain zero new-host process routes",
+            "duplicate repo ids select only the exact request host"
           ]
         },
         {
           "file": "src/main/runtime/orca-runtime.test.ts",
           "assertions": [
-            "completed runtime reviews retain zero process routes while pending cleanup stays retryable"
+            "runtime reviews retain zero process routes while pending cleanup reconstructs authority",
+            "same-id local and SSH repos fail closed without host qualification"
           ]
+        },
+        {
+          "file": "src/main/git/preserved-branch-cleanup-provenance.test.ts",
+          "assertions": [
+            "exact branch and Orca-created remote provenance survives process restart",
+            "branch deletion removes authority and remote ownership stays bounded per remote"
+          ]
+        },
+        {
+          "file": "src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts",
+          "assertions": ["batch cleanup preserves direct-SSH host and nested runtime identity"]
         }
       ],
       "evidenceRuns": [
@@ -73,10 +83,10 @@
           "date": "2026-08-11",
           "runner": "local",
           "platform": "macos",
-          "command": "pnpm exec vitest run --config config/vitest.config.ts src/renderer/src/store/slices/worktrees.test.ts src/main/ipc/worktrees.test.ts src/main/runtime/orca-runtime.test.ts --reporter=dot",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/git/preserved-branch-cleanup-provenance.test.ts src/main/ipc/worktrees.test.ts src/main/runtime/orca-runtime.test.ts src/renderer/src/store/slices/worktrees.test.ts src/renderer/src/store/slices/workspace-cleanup-removal-preflight.test.ts --reporter=dot",
           "result": "passed",
-          "durationSeconds": 4.3,
-          "summary": "Five deterministic lifecycle and skew contracts passed on candidate ef59d5c10e. The full six-file affected suite passed 2,078 tests with one unrelated skip."
+          "durationSeconds": 10.8,
+          "summary": "The reconstruct-on-demand working tree passed 1,629 focused tests with one unrelated skip before the final latest-main rebase."
         }
       ],
       "runtimeBudget": {
@@ -85,27 +95,27 @@
       },
       "flakeHistory": {
         "status": "unknown",
-        "evidence": "The deterministic focused and full affected suites pass locally after rebasing onto 6acd69c516; CI and soak history have not started."
+        "evidence": "The deterministic focused suite passes locally before the required final latest-main rebase; CI and soak history have not started."
       },
       "redGreenEvidence": {
         "status": "complete",
-        "evidence": "Byte-identical final test files had SHA-256 ceb9478ef71afec5428d56a121e57cb362d4cdef478689d2044a40666b351046, f7c63d136c26dc8ea92b031ca2000ef132a316c72473d03da2a3d9b3f4f6ed99, and d76c345aed09954059cc424bf63007c56892913cd603f3f198fa66afcd8f8edc. The 6acd69c516 baseline with test instrumentation and candidate with the three routing fixes disabled each retained exactly eight renderer, IPC, and runtime routes and failed 5/5; candidate ef59d5c10e passed 5/5."
+        "evidence": "The earlier byte-identical lifecycle oracle proved eight retained renderer, IPC, and runtime routes on the affected 6acd69c516 baseline and with routing cleanup disabled. Final hashes and latest-main baseline/candidate/revert results will be refreshed immediately before PR creation."
       },
       "performanceBudget": {
         "required": true,
-        "evidence": "The three process routing maps are removed. Completion performs only keyed authority deletion and one additive release call; force-delete performs keyed lookup. No polling, timer, retry loop, listener, hot-path scan, subprocess, provider listing, or retained unique process route key is added."
+        "evidence": "The three process routing maps and additive release RPC are removed. Preservation performs bounded Git config writes; force-delete performs a constant number of targeted Git config reads before the existing branch/remote cleanup. No polling, timer, retry loop, listener, hot-path scan, provider listing, or retained unique process route key is added."
       },
       "promotionCriteria": [
         "Collect 100 consecutive focused CI passes or 14 days of soak history.",
-        "Collect a packaged headed client/new-host and new-client/old-host upgrade journey.",
-        "Collect physical Windows/WSL coverage for persisted host authority."
+        "Collect a packaged headed old-client/new-host and new-client/old-host upgrade journey.",
+        "Collect physical Windows/WSL coverage for Git-scoped cleanup provenance."
       ],
       "knownGaps": [
         "An old host cannot be retroactively changed by a new client; its historical in-memory cleanup map remains until host update or restart.",
-        "Old clients cannot signal review dismissal, so a new host conservatively retains minimal durable authority until force-delete or a later new-client release.",
-        "Live packaged headed/headless skew and physical Windows/WSL journeys are not collected; deterministic contract tests cover their protocol shapes."
+        "A preserved user branch retains one branch-scoped expected-head key until that branch is deleted; this is Git-owned provenance, not process or per-review routing state.",
+        "Live packaged headed/headless skew and physical Windows/WSL journeys are not collected; deterministic contracts cover both unchanged wire shapes."
       ],
-      "demotionRule": "Keep experimental or demote if any completed review retains a process route, pending authority loses exact routing or push provenance, mixed-version release becomes fatal, or the focused contract flakes without an identified product or harness bug."
+      "demotionRule": "Keep experimental or demote if any review retains a process route, pending authority loses exact host/head/push provenance, mixed-version remove or force-delete becomes incompatible, or the focused contract flakes without an identified product or harness bug."
     },
     {
       "id": "editor.restored-sibling-owner-reparent",
