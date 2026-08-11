@@ -11,7 +11,7 @@ import { ensureTerminalVisible, waitForActiveWorktree, waitForSessionReady } fro
 
 const FIXTURE_NAME = 'paired-html-focus.html'
 
-test('keeps a selected remote HTML browser tab focused after host adoption @headful', async ({
+test('keeps a selected remote HTML browser tab focused after host adoption', async ({
   orcaPage,
   testRepoPath
 }, testInfo) => {
