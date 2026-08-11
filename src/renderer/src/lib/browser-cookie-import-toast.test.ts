@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { successToastMock, warningToastMock, infoToastMock, getStateMock } = vi.hoisted(() => ({
-  successToastMock: vi.fn(),
-  warningToastMock: vi.fn(),
-  infoToastMock: vi.fn(),
-  getStateMock: vi.fn()
-}))
+const { successToastMock, warningToastMock, infoToastMock, errorToastMock, getStateMock } =
+  vi.hoisted(() => ({
+    successToastMock: vi.fn(),
+    warningToastMock: vi.fn(),
+    infoToastMock: vi.fn(),
+    errorToastMock: vi.fn(),
+    getStateMock: vi.fn()
+  }))
 
 vi.mock('sonner', () => ({
-  toast: { success: successToastMock, warning: warningToastMock, info: infoToastMock }
+  toast: {
+    success: successToastMock,
+    warning: warningToastMock,
+    info: infoToastMock,
+    error: errorToastMock
+  }
 }))
 
 vi.mock('@/store', () => ({
@@ -30,7 +37,13 @@ describe('emitBrowserCookieImportToast', () => {
     successToastMock.mockReset()
     warningToastMock.mockReset()
     infoToastMock.mockReset()
+    errorToastMock.mockReset()
     getStateMock.mockReset()
+    getStateMock.mockReturnValue({
+      activeWorktreeId: 'worktree-1',
+      closeSettingsPage: vi.fn(),
+      openBrowserProfileTabInActiveWorkspace: vi.fn().mockResolvedValue(true)
+    })
   })
 
   it('shows the localized total-failure warning', () => {
@@ -119,6 +132,7 @@ describe('emitBrowserCookieImportToast', () => {
     const closeSettingsPage = vi.fn()
     const openBrowserProfileTabInActiveWorkspace = vi.fn().mockResolvedValue(true)
     getStateMock.mockReturnValue({
+      activeWorktreeId: 'worktree-1',
       closeSettingsPage,
       openBrowserProfileTabInActiveWorkspace
     })
@@ -138,10 +152,11 @@ describe('emitBrowserCookieImportToast', () => {
     )
   })
 
-  it('keeps Settings open when no workspace can host the sign-in tab', async () => {
+  it('keeps Settings open and reports failure when no workspace can host the sign-in tab', async () => {
     const closeSettingsPage = vi.fn()
     const openBrowserProfileTabInActiveWorkspace = vi.fn().mockResolvedValue(false)
     getStateMock.mockReturnValue({
+      activeWorktreeId: 'worktree-1',
       closeSettingsPage,
       openBrowserProfileTabInActiveWorkspace
     })
@@ -153,7 +168,51 @@ describe('emitBrowserCookieImportToast', () => {
     )
     infoToastMock.mock.calls[0][1].action.onClick()
 
-    await vi.waitFor(() => expect(openBrowserProfileTabInActiveWorkspace).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(errorToastMock).toHaveBeenCalledTimes(1))
+    expect(errorToastMock).toHaveBeenCalledWith(
+      'Could not open a browser tab. Open one and sign in at accounts.google.com to keep your Google session.'
+    )
     expect(closeSettingsPage).not.toHaveBeenCalled()
+  })
+
+  it('reports failure when opening the sign-in tab rejects', async () => {
+    const closeSettingsPage = vi.fn()
+    const openBrowserProfileTabInActiveWorkspace = vi
+      .fn()
+      .mockRejectedValue(new Error('runtime unavailable'))
+    getStateMock.mockReturnValue({
+      activeWorktreeId: 'worktree-1',
+      closeSettingsPage,
+      openBrowserProfileTabInActiveWorkspace
+    })
+
+    emitBrowserCookieImportToast(
+      { ...summary, googleCookiesPresent: true },
+      'Imported 3 cookies.',
+      'profile-1'
+    )
+    infoToastMock.mock.calls[0][1].action.onClick()
+
+    await vi.waitFor(() => expect(errorToastMock).toHaveBeenCalledTimes(1))
+    expect(closeSettingsPage).not.toHaveBeenCalled()
+  })
+
+  it('omits the sign-in action when no worktree can host the tab', () => {
+    const openBrowserProfileTabInActiveWorkspace = vi.fn()
+    getStateMock.mockReturnValue({
+      activeWorktreeId: null,
+      closeSettingsPage: vi.fn(),
+      openBrowserProfileTabInActiveWorkspace
+    })
+
+    emitBrowserCookieImportToast(
+      { ...summary, googleCookiesPresent: true },
+      'Imported 3 cookies.',
+      'profile-1'
+    )
+
+    expect(infoToastMock).toHaveBeenCalledTimes(1)
+    expect(infoToastMock.mock.calls[0][1].action).toBeUndefined()
+    expect(openBrowserProfileTabInActiveWorkspace).not.toHaveBeenCalled()
   })
 })
