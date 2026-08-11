@@ -7,7 +7,10 @@ import { makePaneKey } from '../../../shared/stable-pane-id'
 import { toWebTerminalSurfaceTabId } from '../../../shared/terminal-surface-id'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import {
+  peekWebSessionFocusIntent,
   recordWebSessionFocusIntent,
+  recordReservedWebSessionFocusIntent,
+  reserveWebSessionFocusIntent,
   resetWebSessionFocusIntentForTests
 } from './web-session-focus-intent'
 import {
@@ -554,6 +557,7 @@ describe('applyWebSessionTabsSnapshot', () => {
   })
 
   it('clears web session tracking maps when the host removes a worktree snapshot', () => {
+    const focusToken = reserveWebSessionFocusIntent({ environmentId: ENV }, WT)!
     const workspace: BrowserWorkspace = {
       id: 'local-browser-workspace',
       worktreeId: WT,
@@ -668,6 +672,15 @@ describe('applyWebSessionTabsSnapshot', () => {
       hostMappings: 0,
       hostMappingWorktrees: 0
     })
+    expect(peekWebSessionFocusIntent({ environmentId: ENV }, WT)).toBeNull()
+    expect(
+      recordReservedWebSessionFocusIntent(
+        { environmentId: ENV },
+        WT,
+        focusToken,
+        'host-browser-unified'
+      )
+    ).toBe(false)
   })
 
   it('clears web session tracking maps for one runtime environment on teardown', () => {

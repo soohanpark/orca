@@ -2841,6 +2841,7 @@
         "remote agent launch and explicit resume",
         "multi-client remote runtime sessions",
         "paired viewer-local structured agent focus",
+        "paired viewer-local session tab activation",
         "headed desktop remote-server pairing",
         "headless remote-server parity",
         "daemon and relay reconnect",
@@ -2859,10 +2860,11 @@
         "https://github.com/stablyai/orca/issues/9352",
         "https://github.com/stablyai/orca/pull/9687",
         "https://github.com/stablyai/orca/issues/10192",
-        "https://github.com/stablyai/orca/pull/10193"
+        "https://github.com/stablyai/orca/pull/10193",
+        "https://linear.app/stably/issue/STA-3872/unable-to-open-html-files-in-remote-server"
       ],
-      "invariant": "For every claim-capable execution route, one provider-session identity has at most one live PTY owner and one canonical host surface across concurrent clients, retries, reconnects, and stale publications. For paired structured fresh and resume requests, the authenticated owning runtime creates in background without a renderer window; activate=true focuses the exact requested leaf only on the requesting viewer, while activate=false changes no viewer focus. A live orphan may be adopted only when the controller proves its exact handle and incarnation, its worktree and host owner match, no competing visual owner exists, and a host topology CAS wins. A viewer may classify completion only from successful host/provider inspection or explicit lifecycle evidence; transport, handle, or provider unavailability remains unknown and breaks any consecutive-idle proof. A physical exit retires that exact incarnation durably so stale client state and host restart cannot recreate it. Mixed-version routes select the unchanged legacy request before any authority side effect or execution-owner-local filesystem access.",
-      "oracle": "Race independent clients and repeated operation IDs, then assert one physical spawn and one canonical PTY/surface; inject exit-before-reply, provider disconnect, conflicting claim scope, old daemon/relay capabilities, reused handles, stale incarnations, owner mismatch, and topology revision conflict; assert safe adoption or explicit failure without a second spawn or wrong-process attachment. Run fresh/resume with activate true/false against an isolated headed desktop host and a separate paired client, then against isolated headless serve: assert host presentation stays background, only the requesting viewer focuses the exact leaf, inactive calls preserve client/DOM focus, a same-version publication replay cannot lose focus intent, and sibling-first split publication cannot consume exact-leaf intent. Restore legacy split panes and groups beside a newer host-owned tab, preserving exact predecessor/new/successor order, output, input, resize, titles, tab/leaf identity, active group, and multi-client convergence. For completion, drive a known running agent through outer transport loss, authoritative provider rejection, reconnect, explicit stop, real exit status, and successful hook completion; assert unavailable evidence never dispatches completion and two fresh authoritative idle samples are required after the gap. After exact exit, assert terminal and tab listings omit the surface, a stale publication cannot restore it, restart cannot resurrect it, exact tokened fixture PIDs are dead, and unrelated tabs/processes survive until scoped cleanup.",
+      "invariant": "For every claim-capable execution route, one provider-session identity has at most one live PTY owner and one canonical host surface across concurrent clients, retries, reconnects, and stale publications. For paired structured fresh and resume requests, the authenticated owning runtime creates in background without a renderer window; activate=true focuses the exact requested leaf only on the requesting viewer, while activate=false changes no viewer focus. While any paired session-tab activation is in flight, the caller's canonical host-tab focus intent survives racing publications; after acknowledgement, the requesting viewer reconciles from the authoritative host snapshot without an older activation replacing newer intent. A live orphan may be adopted only when the controller proves its exact handle and incarnation, its worktree and host owner match, no competing visual owner exists, and a host topology CAS wins. A viewer may classify completion only from successful host/provider inspection or explicit lifecycle evidence; transport, handle, or provider unavailability remains unknown and breaks any consecutive-idle proof. A physical exit retires that exact incarnation durably so stale client state and host restart cannot recreate it. Mixed-version routes select the unchanged legacy request before any authority side effect or execution-owner-local filesystem access.",
+      "oracle": "Race independent clients and repeated operation IDs, then assert one physical spawn and one canonical PTY/surface; inject exit-before-reply, provider disconnect, conflicting claim scope, old daemon/relay capabilities, reused handles, stale incarnations, owner mismatch, and topology revision conflict; assert safe adoption or explicit failure without a second spawn or wrong-process attachment. Run fresh/resume with activate true/false against an isolated headed desktop host and a separate paired client, then against isolated headless serve: assert host presentation stays background, only the requesting viewer focuses the exact leaf, inactive calls preserve client/DOM focus, a same-version publication replay cannot lose focus intent, and sibling-first split publication cannot consume exact-leaf intent. Open an HTML file through the paired client's Explorer, activate the terminal, then reactivate the browser; assert the host inventory, client store, and visible remote frame agree on browser focus. Fence overlapping activations so an older acknowledgement cannot replace the latest caller intent. Restore legacy split panes and groups beside a newer host-owned tab, preserving exact predecessor/new/successor order, output, input, resize, titles, tab/leaf identity, active group, and multi-client convergence. For completion, drive a known running agent through outer transport loss, authoritative provider rejection, reconnect, explicit stop, real exit status, and successful hook completion; assert unavailable evidence never dispatches completion and two fresh authoritative idle samples are required after the gap. After exact exit, assert terminal and tab listings omit the surface, a stale publication cannot restore it, restart cannot resurrect it, exact tokened fixture PIDs are dead, and unrelated tabs/processes survive until scoped cleanup.",
       "commands": [
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/agent-session.test.ts src/renderer/src/runtime/web-runtime-session.test.ts src/renderer/src/runtime/web-session-tabs-sync.test.ts src/renderer/src/runtime/web-session-intent-owner.test.ts src/renderer/src/runtime/remote-server-parity.test.ts",
         "pnpm exec vitest run --config config/vitest.config.ts src/shared/claimed-agent-pty-owner.test.ts src/main/daemon/daemon-pty-adapter.test.ts src/main/providers/ssh-pty-provider-agent-session-create-operation.test.ts src/main/runtime/orca-runtime-agent-session-operation.test.ts src/main/runtime/remote-agent-session-host-authority.integration.test.ts src/main/runtime/orca-runtime-terminal-retirement.test.ts src/renderer/src/components/terminal-pane/remote-runtime-pty-transport.test.ts src/renderer/src/runtime/remote-runtime-session-tabs-inflight.test.ts src/renderer/src/runtime/web-runtime-session.test.ts src/renderer/src/runtime/web-session-tabs-sync.test.ts",
@@ -2873,6 +2875,7 @@
         "pnpm exec electron-vite build --mode e2e",
         "VITE_EXPOSE_STORE=true pnpm run build:web",
         "ORCA_E2E_WEB_CLIENT=1 SKIP_BUILD=1 pnpm exec playwright test tests/e2e/remote-agent-session-focus-authority.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
+        "ORCA_E2E_WEB_CLIENT=1 SKIP_BUILD=1 pnpm exec playwright test tests/e2e/paired-remote-html-browser-focus.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
         "Manual headed paired-server journey: isolated Orca desktop host + separate paired web client + real Codex process + 20-second WebSocket fault + reconnect + explicit stop",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orca-runtime.test.ts src/main/runtime/terminal-orphan-owner.test.ts src/main/runtime/terminal-orphan-topology.test.ts src/renderer/src/runtime/web-session-terminal-orphan-recovery.test.ts src/renderer/src/runtime/web-session-terminal-orphan-mixed-version.test.ts src/renderer/src/runtime/web-session-tabs-sync.test.ts --maxWorkers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/providers/pty-process-inspection.test.ts src/main/daemon/terminal-host.test.ts src/main/daemon/daemon-pty-router.test.ts src/main/daemon/degraded-daemon-pty-provider.test.ts src/relay/pty-handler.test.ts src/main/daemon/daemon-pty-adapter.test.ts src/main/runtime/orca-runtime.test.ts tests/e2e/remote-agent-completion-authority.unit.test.ts src/renderer/src/runtime/runtime-terminal-inspection.test.ts src/renderer/src/components/terminal-pane/agent-completion-coordinator.test.ts",
@@ -2904,6 +2907,7 @@
         "src/renderer/src/runtime/web-session-intent-owner.test.ts",
         "src/renderer/src/runtime/remote-server-parity.test.ts",
         "tests/e2e/remote-agent-session-focus-authority.spec.ts",
+        "tests/e2e/paired-remote-html-browser-focus.spec.ts",
         "config/scripts/remote-agent-session-authority-repro.mjs",
         "config/scripts/remote-agent-session-process-cleanup.mjs",
         "tests/e2e/remote-terminal-tab-retirement.unit.test.ts",
@@ -3015,7 +3019,8 @@
           "file": "src/renderer/src/runtime/web-runtime-session.test.ts",
           "assertions": [
             "fresh/resume activate true/false always request background host presentation and record focus intent only for active calls",
-            "a publication that beats the RPC response is replayed once without broad polling"
+            "a publication that beats the RPC response is replayed once without broad polling",
+            "session-tab activation records canonical host focus before the RPC and older acknowledgements cannot replace newer intent"
           ]
         },
         {
@@ -3032,6 +3037,12 @@
             "headed desktop host remains unfocused while the paired requester alone follows active fresh/resume sessions and inactive rows preserve exact client/DOM focus",
             "legacy afterTabId placement is exact in authoritative, mirrored, and rendered order with a pre-existing successor",
             "host PTY inventory plus writable agent/unrelated shell markers prove liveness, unrelated survival, and exact terminal/tab/PTY/process cleanup"
+          ]
+        },
+        {
+          "file": "tests/e2e/paired-remote-html-browser-focus.spec.ts",
+          "assertions": [
+            "Explorer HTML open followed by terminal-to-browser activation converges host inventory, client focus, and the visible remote browser frame"
           ]
         },
         {
@@ -3083,6 +3094,15 @@
         }
       ],
       "evidenceRuns": [
+        {
+          "date": "2026-08-11",
+          "runner": "local",
+          "platform": "macos",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/agent-session.test.ts src/renderer/src/runtime/web-runtime-session.test.ts src/renderer/src/runtime/web-session-tabs-sync.test.ts src/renderer/src/runtime/web-session-intent-owner.test.ts src/renderer/src/runtime/remote-server-parity.test.ts",
+          "result": "passed",
+          "durationSeconds": 4.05,
+          "summary": "STA-3872 final acceptance on origin/main@46756b386a passed 167 focused tests; the byte-identical production-disabled control failed 14 focus-ordering, teardown, ambiguity, and staging assertions, then the restored candidate passed 167/167. The broader authority suite passed 454 tests, a freshly rebuilt headed desktop-host/paired-client HTML journey passed with host inventory, client-store, and visible-frame agreement, and lint plus typecheck passed."
+        },
         {
           "date": "2026-07-23",
           "runner": "local",
@@ -3184,11 +3204,11 @@
       },
       "redGreenEvidence": {
         "status": "partial",
-        "evidence": "Issue #10192 has byte-identical renderer-oracle evidence: origin/main@ee87bb38d (and earlier ef985ed80 and 94d3db4a2) fails activated fresh and resume rows by requesting focused host presentation, the PR client change passes all four rows, and disabling it turns the activated rows red again. The original PR still fails an old-client focused request against a new headless host; host-boundary normalization turns that mixed-version control green while trusted local callers remain focused. Issue #9151 has local red/green evidence for completion authority. The exact retirement oracle is red on pre-#9687 commit 2a32c5c9a and PR #9053 head d3a1d3047, and green on main@4fce2de49. Saved CI artifacts are still needed."
+        "evidence": "Issue #10192 has byte-identical renderer-oracle evidence: origin/main@ee87bb38d (and earlier ef985ed80 and 94d3db4a2) fails activated fresh and resume rows by requesting focused host presentation, the PR client change passes all four rows, and disabling it turns the activated rows red again. The original PR still fails an old-client focused request against a new headless host; host-boundary normalization turns that mixed-version control green while trusted local callers remain focused. STA-3872 has local byte-identical activation-intent evidence: affected latest-main and the production-disabled candidate lose canonical host focus, while the candidate preserves it and the headed paired Electron HTML journey stays focused. Issue #9151 has local red/green evidence for completion authority. The exact retirement oracle is red on pre-#9687 commit 2a32c5c9a and PR #9053 head d3a1d3047, and green on main@4fce2de49. Saved CI artifacts are still needed."
       },
       "performanceBudget": {
         "required": true,
-        "evidence": "Agent-session reconciliation runs only at explicit claim admission, dedupes concurrent provider listing, and adds no polling or renderer output work. Viewer focus reconciliation reuses the existing one post-create list and bounded intent map; same-version replay permits one already-received snapshot, and exact-leaf matching adds one conditional scan over the bounded tab snapshot. Completion inspection reuses the coordinator's per-pane in-flight guard, global concurrency/rate queue, and existing error backoff; the strict daemon path reduces two foreground RPCs to one. Create-operation ledgers are capped globally and per client, expire after 24 hours, and reject rather than evict live replay fences. Capability caches are bounded or connection-scoped, and exact handoffs are consumed by the next authoritative snapshot."
+        "evidence": "Agent-session reconciliation runs only at explicit claim admission, dedupes concurrent provider listing, and adds no polling or renderer output work. Viewer focus reconciliation keeps the existing post-create list, applies the authoritative activation response without another list, and serializes only focus-producing operations for the same owner/worktree. Obsolete queued activations coalesce to one retained request while distinct tab creates remain ordered; the operation queue self-cleans on completion, and worktree/environment teardown invalidates every live reservation. Same-version replay permits one already-received snapshot, and exact-leaf matching adds one conditional scan over the bounded tab snapshot. Completion inspection reuses the coordinator's per-pane in-flight guard, global concurrency/rate queue, and existing error backoff; the strict daemon path reduces two foreground RPCs to one. Create-operation ledgers are capped globally and per client, expire after 24 hours, and reject rather than evict live replay fences. Capability caches are bounded or connection-scoped, and exact handoffs are consumed by the next authoritative snapshot."
       },
       "promotionCriteria": [
         "Run the focused gate and remote-server repro for at least 100 consecutive passes or 14 days across required CI platforms.",
@@ -3198,6 +3218,7 @@
       ],
       "knownGaps": [
         "The primary headed macOS desktop-server journey is automated locally but not yet run in CI; Windows and Linux window, ConPTY, update, sleep/wake, and firewall behavior remain uncollected.",
+        "STA-3872's HTML focus journey is headed macOS only; headless parity is covered at the shared focus/authority contract rather than with a second HTML UI journey.",
         "Mixed-version pairings remain conservative only when the completion-aware client and strict-inspection host changes are both present; older peers retain their legacy classification behavior.",
         "The secondary headless parity harness runs on macOS with a local daemon-backed execution owner and independent short-lived encrypted RPC clients; two persistent viewer-store mirrors and reconnect ordering are joined deterministically in the cross-boundary unit test rather than mounted live.",
         "SSH and relay failure ordering is deterministic provider-contract coverage, not a live SSH-host journey or paired-Orca-server proof; WSL has no provider-specific run, and Linux and Windows runs remain uncollected.",

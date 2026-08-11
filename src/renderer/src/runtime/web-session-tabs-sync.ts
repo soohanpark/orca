@@ -54,6 +54,7 @@ import { toRuntimeWorktreeSelector } from './runtime-worktree-selector'
 import {
   clearWebSessionFocusIntent,
   clearWebSessionFocusIntentsForOwner,
+  consumeWebSessionFocusIntent,
   peekWebSessionFocusIntent
 } from './web-session-focus-intent'
 import {
@@ -671,6 +672,7 @@ function clearWebSessionTabsTrackingForWorktree(environmentId: string, worktreeI
   removeWebSessionTabsEnvironment(environmentId, worktreeId)
   lastHostTerminalTabCountByWorktree.delete(key)
   clearWebRuntimeWakeTerminalRespawnForWorktree(worktreeId)
+  clearWebSessionFocusIntent({ environmentId }, worktreeId)
   clearWebSessionReorderIntentsForWorktree({ environmentId }, worktreeId)
   clearWebSessionCloseIntentsForWorktree({ environmentId }, worktreeId)
   clearWebAgentSessionHandoffsForWorktree(environmentId, worktreeId)
@@ -2329,7 +2331,7 @@ function applyWebSessionTabsSnapshotWithContext(
   const navigationIntentTab = callerFocusIntentTab ?? followIntentTab
   const honorSnapshotActiveFocus = navigationIntentTab !== null
   if (callerFocusIntentTab) {
-    clearWebSessionFocusIntent({ environmentId }, worktreeId)
+    consumeWebSessionFocusIntent({ environmentId }, worktreeId)
   }
   const currentTerminalTabs = state.tabsByWorktree[worktreeId] ?? []
   const existingTerminalById = new Map(currentTerminalTabs.map((tab) => [tab.id, tab]))

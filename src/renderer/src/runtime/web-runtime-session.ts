@@ -29,14 +29,22 @@ import type { TerminalPaneLayoutNode, TuiAgent } from '../../../shared/types'
 import type { AppState } from '../store/types'
 import { getRuntimeEnvironmentIdForWorktree } from '../lib/worktree-runtime-owner'
 import { useAppStore } from '../store'
-import { unwrapRuntimeRpcResult } from './runtime-rpc-client'
+import { RuntimeRpcCallError, unwrapRuntimeRpcResult } from './runtime-rpc-client'
 import {
   createAgentSessionCreateOperation,
   withAgentSessionCreateOperationId
 } from './agent-session-create-operation'
 import { parseRemoteRuntimePtyId } from './runtime-terminal-stream'
 import { toRuntimeWorktreeSelector } from './runtime-worktree-selector'
-import { recordWebSessionFocusIntent } from './web-session-focus-intent'
+import {
+  clearReservedWebSessionFocusIntent,
+  isWebSessionFocusIntentTokenCurrent,
+  isWebSessionFocusIntentTokenValid,
+  recordReservedWebSessionFocusIntent,
+  releaseWebSessionFocusIntentToken,
+  reserveWebSessionFocusIntent,
+  runSerializedWebSessionFocusOperation
+} from './web-session-focus-intent'
 import { clearWebSessionCloseIntent, recordWebSessionCloseIntent } from './web-session-close-intent'
 import {
   clearWebSessionReorderIntent,
@@ -86,6 +94,12 @@ const WEB_RUNTIME_SPLIT_MIRROR_SUPPRESSION_TTL_MS = 30_000
 let pendingWebRuntimeSplitMirrorTelemetryId = 0
 const pendingRuntimeWorktreeRecoveryRefreshes = new Map<string, symbol>()
 const RUNTIME_WORKTREE_RECOVERY_REFRESH_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000] as const
+const AMBIGUOUS_ACTIVATION_RPC_ERROR_CODES = new Set([
+  'invalid_runtime_response',
+  'remote_runtime_unavailable',
+  'runtime_manually_disconnected',
+  'runtime_timeout'
+])
 
 function captureRuntimeEnvironmentCall(
   environmentId: string,
@@ -228,6 +242,8 @@ async function createWebRuntimeSessionTerminalResult(
   }
   const intentOwner = captureWebSessionIntentOwner(environmentId)
   const callEnvironment = captureRuntimeEnvironmentCall(environmentId, intentOwner.pairingRevision)
+  const focusToken =
+    args.activate === false ? null : reserveWebSessionFocusIntent(intentOwner, args.worktreeId)
 
   if (args.selectWorktree !== false) {
     selectWebRuntimeSessionWorktree(args.worktreeId, environmentId)
@@ -235,166 +251,207 @@ async function createWebRuntimeSessionTerminalResult(
   let hostCreated = false
   let createdTabId: string | undefined
   let createdLeafId: string | undefined
+  let focusRecorded = false
   try {
-    const agent = args.launchAgent ?? args.agent
-    const agentArgsOverride =
-      args.agentArgs !== undefined ? args.agentArgs : args.launchConfig?.agentArgs
-    if (agent) {
-      let legacyAlreadyPlacedInGroup = false
-      // Why: structured creation cannot yet express afterTabId; keep the exact legacy placement contract until it can.
-      // Why: focus belongs to the paired client; a headless execution host has no renderer to focus.
-      const hostAuthority = args.afterTabId
-        ? undefined
-        : args.agentSessionKind === 'resume'
-          ? args.providerSession
-            ? async () =>
-                unwrapRuntimeRpcResult(
-                  (await callEnvironment({
-                    method: 'terminal.ensureAgentSession',
-                    params: {
-                      kind: 'explicit',
-                      worktree: toRuntimeWorktreeSelector(args.worktreeId),
-                      agent,
-                      providerSession: args.providerSession!,
-                      ...(args.launchConfig?.ompResumeFilePath
-                        ? { ompResumeFilePath: args.launchConfig.ompResumeFilePath }
-                        : {}),
-                      ...(agentArgsOverride !== undefined ? { agentArgs: agentArgsOverride } : {}),
-                      ...(args.launchPreferences
-                        ? { launchPreferences: args.launchPreferences }
-                        : {}),
-                      presentation: 'background'
-                    },
-                    timeoutMs: 15_000
-                  })) as RuntimeRpcResponse<RuntimeEnsureAgentSessionResult>
-                )
-            : undefined
-          : async () =>
-              await createAgentSessionCreateOperation().run(async (clientOperationId) =>
-                unwrapRuntimeRpcResult(
-                  (await callEnvironment({
-                    method: 'terminal.createAgentSession',
-                    params: withAgentSessionCreateOperationId(
-                      {
+    const createOnHost = async (): Promise<void> => {
+      if (
+        focusToken &&
+        !isWebSessionFocusIntentTokenValid(intentOwner, args.worktreeId, focusToken)
+      ) {
+        return
+      }
+      const agent = args.launchAgent ?? args.agent
+      const agentArgsOverride =
+        args.agentArgs !== undefined ? args.agentArgs : args.launchConfig?.agentArgs
+      if (agent) {
+        let legacyAlreadyPlacedInGroup = false
+        // Why: structured creation cannot yet express afterTabId; keep the exact legacy placement contract until it can.
+        // Why: focus belongs to the paired client; a headless execution host has no renderer to focus.
+        const hostAuthority = args.afterTabId
+          ? undefined
+          : args.agentSessionKind === 'resume'
+            ? args.providerSession
+              ? async () =>
+                  unwrapRuntimeRpcResult(
+                    (await callEnvironment({
+                      method: 'terminal.ensureAgentSession',
+                      params: {
+                        kind: 'explicit',
                         worktree: toRuntimeWorktreeSelector(args.worktreeId),
                         agent,
-                        ...(args.prompt ? { prompt: args.prompt } : {}),
-                        ...(args.promptDelivery ? { promptDelivery: args.promptDelivery } : {}),
+                        providerSession: args.providerSession!,
+                        ...(args.launchConfig?.ompResumeFilePath
+                          ? { ompResumeFilePath: args.launchConfig.ompResumeFilePath }
+                          : {}),
                         ...(agentArgsOverride !== undefined
                           ? { agentArgs: agentArgsOverride }
                           : {}),
                         ...(args.launchPreferences
                           ? { launchPreferences: args.launchPreferences }
                           : {}),
-                        ...(args.cwd ? { startupCwd: args.cwd } : {}),
-                        ...(args.viewMode ? { viewMode: args.viewMode } : {}),
                         presentation: 'background'
                       },
-                      clientOperationId
-                    ),
-                    timeoutMs: 15_000
-                  })) as RuntimeRpcResponse<RuntimeCreateAgentSessionResult>
+                      timeoutMs: 15_000
+                    })) as RuntimeRpcResponse<RuntimeEnsureAgentSessionResult>
+                  )
+              : undefined
+            : async () =>
+                await createAgentSessionCreateOperation().run(async (clientOperationId) =>
+                  unwrapRuntimeRpcResult(
+                    (await callEnvironment({
+                      method: 'terminal.createAgentSession',
+                      params: withAgentSessionCreateOperationId(
+                        {
+                          worktree: toRuntimeWorktreeSelector(args.worktreeId),
+                          agent,
+                          ...(args.prompt ? { prompt: args.prompt } : {}),
+                          ...(args.promptDelivery ? { promptDelivery: args.promptDelivery } : {}),
+                          ...(agentArgsOverride !== undefined
+                            ? { agentArgs: agentArgsOverride }
+                            : {}),
+                          ...(args.launchPreferences
+                            ? { launchPreferences: args.launchPreferences }
+                            : {}),
+                          ...(args.cwd ? { startupCwd: args.cwd } : {}),
+                          ...(args.viewMode ? { viewMode: args.viewMode } : {}),
+                          presentation: 'background'
+                        },
+                        clientOperationId
+                      ),
+                      timeoutMs: 15_000
+                    })) as RuntimeRpcResponse<RuntimeCreateAgentSessionResult>
+                  )
                 )
-              )
-      const created = await runRemoteAgentSessionLaunch<{
-        terminal: CreatedAgentTerminalIdentity
-      }>({
-        environmentId,
-        ...(hostAuthority ? { hostAuthority } : {}),
-        ...(args.agentSessionKind === 'resume' && agent === 'omp'
-          ? { hostAuthorityCapability: AGENT_SESSION_OMP_RESUME_PATH_RUNTIME_CAPABILITY }
-          : {}),
-        legacy: async () => {
-          const response = await callEnvironment({
-            method: 'session.tabs.createTerminal',
+        const created = await runRemoteAgentSessionLaunch<{
+          terminal: CreatedAgentTerminalIdentity
+        }>({
+          environmentId,
+          ...(hostAuthority ? { hostAuthority } : {}),
+          ...(args.agentSessionKind === 'resume' && agent === 'omp'
+            ? { hostAuthorityCapability: AGENT_SESSION_OMP_RESUME_PATH_RUNTIME_CAPABILITY }
+            : {}),
+          legacy: async () => {
+            const response = await callEnvironment({
+              method: 'session.tabs.createTerminal',
+              params: {
+                worktree: toRuntimeWorktreeSelector(args.worktreeId),
+                afterTabId: args.afterTabId ? toHostSessionTabId(args.afterTabId) : undefined,
+                targetGroupId: args.targetGroupId,
+                command: args.command,
+                cwd: args.cwd,
+                ...(args.env ? { env: args.env } : {}),
+                ...(args.envToDelete ? { envToDelete: args.envToDelete } : {}),
+                startupCommandDelivery: args.startupCommandDelivery,
+                ...(args.launchConfig ? { launchConfig: args.launchConfig } : {}),
+                ...(args.launchToken ? { launchToken: args.launchToken } : {}),
+                ...(args.agent ? { agent: args.agent } : {}),
+                ...(args.launchAgent ? { launchAgent: args.launchAgent } : {}),
+                ...(args.viewMode ? { viewMode: args.viewMode } : {}),
+                // Why: old hosts understand activate:false; new hosts use select/navigation for caller-local focus.
+                activate: false,
+                select: focusToken
+                  ? isWebSessionFocusIntentTokenCurrent(intentOwner, args.worktreeId, focusToken)
+                  : false,
+                navigation: 'caller'
+              },
+              timeoutMs: 15_000
+            })
+            const legacyCreated = unwrapRuntimeRpcResult(
+              response as RuntimeRpcResponse<RuntimeMobileSessionCreateTerminalResult>
+            )
+            legacyAlreadyPlacedInGroup = true
+            return {
+              terminal: {
+                tabId: legacyCreated.tab.id,
+                leafId: legacyCreated.tab.leafId
+              }
+            }
+          }
+        })
+        hostCreated = true
+        createdTabId = created.terminal.tabId
+        createdLeafId = legacyAlreadyPlacedInGroup
+          ? created.terminal.leafId
+          : createdTerminalLeafId(created.terminal)
+        if (args.targetGroupId && createdTabId && !legacyAlreadyPlacedInGroup) {
+          await callEnvironment({
+            method: 'session.tabs.move',
             params: {
               worktree: toRuntimeWorktreeSelector(args.worktreeId),
-              afterTabId: args.afterTabId ? toHostSessionTabId(args.afterTabId) : undefined,
+              tabId: createdTabId,
               targetGroupId: args.targetGroupId,
-              command: args.command,
-              cwd: args.cwd,
-              ...(args.env ? { env: args.env } : {}),
-              ...(args.envToDelete ? { envToDelete: args.envToDelete } : {}),
-              startupCommandDelivery: args.startupCommandDelivery,
-              ...(args.launchConfig ? { launchConfig: args.launchConfig } : {}),
-              ...(args.launchToken ? { launchToken: args.launchToken } : {}),
-              ...(args.agent ? { agent: args.agent } : {}),
-              ...(args.launchAgent ? { launchAgent: args.launchAgent } : {}),
-              ...(args.viewMode ? { viewMode: args.viewMode } : {}),
-              // Why: old hosts understand activate:false; new hosts use select/navigation for caller-local focus.
-              activate: false,
-              select: args.activate !== false,
-              navigation: 'caller'
+              kind: 'move-to-group'
             },
             timeoutMs: 15_000
           })
-          const legacyCreated = unwrapRuntimeRpcResult(
-            response as RuntimeRpcResponse<RuntimeMobileSessionCreateTerminalResult>
-          )
-          legacyAlreadyPlacedInGroup = true
-          return {
-            terminal: {
-              tabId: legacyCreated.tab.id,
-              leafId: legacyCreated.tab.leafId
-            }
-          }
         }
-      })
-      hostCreated = true
-      createdTabId = created.terminal.tabId
-      createdLeafId = legacyAlreadyPlacedInGroup
-        ? created.terminal.leafId
-        : createdTerminalLeafId(created.terminal)
-      if (args.targetGroupId && createdTabId && !legacyAlreadyPlacedInGroup) {
-        await callEnvironment({
-          method: 'session.tabs.move',
+      } else {
+        const response = await callEnvironment({
+          method: 'session.tabs.createTerminal',
           params: {
             worktree: toRuntimeWorktreeSelector(args.worktreeId),
-            tabId: createdTabId,
+            afterTabId: args.afterTabId ? toHostSessionTabId(args.afterTabId) : undefined,
             targetGroupId: args.targetGroupId,
-            kind: 'move-to-group'
+            command: args.command,
+            cwd: args.cwd,
+            ...(args.env ? { env: args.env } : {}),
+            ...(args.envToDelete ? { envToDelete: args.envToDelete } : {}),
+            startupCommandDelivery: args.startupCommandDelivery,
+            ...(args.launchConfig ? { launchConfig: args.launchConfig } : {}),
+            ...(args.launchToken ? { launchToken: args.launchToken } : {}),
+            ...(args.viewMode ? { viewMode: args.viewMode } : {}),
+            // Why: old hosts understand activate:false; new hosts use select/navigation for caller-local focus.
+            activate: false,
+            select: focusToken
+              ? isWebSessionFocusIntentTokenCurrent(intentOwner, args.worktreeId, focusToken)
+              : false,
+            navigation: 'caller'
           },
           timeoutMs: 15_000
         })
+        const created = unwrapRuntimeRpcResult(
+          response as RuntimeRpcResponse<RuntimeMobileSessionCreateTerminalResult>
+        )
+        hostCreated = true
+        createdTabId = created.tab.id
+        createdLeafId = created.tab.leafId
       }
-    } else {
-      const response = await callEnvironment({
-        method: 'session.tabs.createTerminal',
-        params: {
-          worktree: toRuntimeWorktreeSelector(args.worktreeId),
-          afterTabId: args.afterTabId ? toHostSessionTabId(args.afterTabId) : undefined,
-          targetGroupId: args.targetGroupId,
-          command: args.command,
-          cwd: args.cwd,
-          ...(args.env ? { env: args.env } : {}),
-          ...(args.envToDelete ? { envToDelete: args.envToDelete } : {}),
-          startupCommandDelivery: args.startupCommandDelivery,
-          ...(args.launchConfig ? { launchConfig: args.launchConfig } : {}),
-          ...(args.launchToken ? { launchToken: args.launchToken } : {}),
-          ...(args.viewMode ? { viewMode: args.viewMode } : {}),
-          // Why: old hosts understand activate:false; new hosts use select/navigation for caller-local focus.
-          activate: false,
-          select: args.activate !== false,
-          navigation: 'caller'
-        },
-        timeoutMs: 15_000
-      })
-      const created = unwrapRuntimeRpcResult(
-        response as RuntimeRpcResponse<RuntimeMobileSessionCreateTerminalResult>
-      )
-      hostCreated = true
-      createdTabId = created.tab.id
-      createdLeafId = created.tab.leafId
     }
-    if (args.activate !== false && createdTabId && matchesWebSessionIntentOwner(intentOwner)) {
+    await (focusToken
+      ? runSerializedWebSessionFocusOperation(intentOwner, args.worktreeId, createOnHost)
+      : createOnHost())
+    if (
+      focusToken &&
+      !isWebSessionFocusIntentTokenValid(intentOwner, args.worktreeId, focusToken)
+    ) {
+      return {
+        outcome: hostCreated
+          ? { status: 'created' }
+          : {
+              status: 'failed',
+              message: translate(
+                'auto.components.right.sidebar.AiVaultPanel.worktreeUnavailable',
+                'Worktree is no longer available.'
+              )
+            },
+        ...(createdTabId ? { hostTabId: createdTabId } : {})
+      }
+    }
+    if (focusToken && createdTabId && matchesWebSessionIntentOwner(intentOwner)) {
       // Why: record focus intent so the reconcile follows the snapshot's active
       // tab to THIS new terminal, instead of sticky-keeping the prior tab.
-      recordWebSessionFocusIntent(intentOwner, args.worktreeId, createdTabId, createdLeafId)
+      focusRecorded = recordReservedWebSessionFocusIntent(
+        intentOwner,
+        args.worktreeId,
+        focusToken,
+        createdTabId,
+        createdLeafId
+      )
     }
     await refreshWebRuntimeSessionTabsSnapshot(environmentId, args.worktreeId, {
       expectedEnvironmentPairingRevision: intentOwner.pairingRevision,
       // Why: the publication can beat the RPC response; replay it once after caller focus intent exists.
-      acceptCurrentSnapshot: args.activate !== false && Boolean(createdTabId)
+      acceptCurrentSnapshot: focusRecorded
     })
     return {
       outcome: { status: 'created' },
@@ -413,6 +470,10 @@ async function createWebRuntimeSessionTerminalResult(
     return {
       outcome: hostCreated ? { status: 'created' } : { status: 'failed', message },
       ...(createdTabId ? { hostTabId: createdTabId } : {})
+    }
+  } finally {
+    if (focusToken) {
+      releaseWebSessionFocusIntentToken(intentOwner, args.worktreeId, focusToken)
     }
   }
 }
@@ -437,32 +498,57 @@ export async function createWebRuntimeSessionBrowserTab(args: {
   }
   const intentOwner = captureWebSessionIntentOwner(environmentId)
   const callEnvironment = captureRuntimeEnvironmentCall(environmentId, intentOwner.pairingRevision)
+  const focusToken = reserveWebSessionFocusIntent(intentOwner, args.worktreeId)
+  if (!focusToken) {
+    return false
+  }
 
   const shouldSelectWorktree = args.selectWorktree !== false
   const stagedFromWorktreeId = useAppStore.getState().activeWorktreeId
   if (shouldSelectWorktree) {
     selectWebRuntimeSessionWorktree(args.worktreeId, environmentId)
   }
+  let focusRecorded = false
   try {
-    const response = await callEnvironment({
-      method: 'browser.tabCreate',
-      params: {
-        worktree: toRuntimeWorktreeSelector(args.worktreeId),
-        url: args.url,
-        profileId: args.profileId ?? undefined,
-        // Why: user clicked "New Browser Tab", so mark it active in the snapshot, else the reconcile snaps back to a terminal.
-        activate: true,
-        // Why: place the new browser in the clicked split group so the host snapshot is authoritative for it (no left-snap).
-        ...(args.targetGroupId ? { targetGroupId: args.targetGroupId } : {}),
-        // Why: web clients need the local tab now; waiting for host webview registration makes the workspace appear to close.
-        waitForRegistration: false
-      },
-      timeoutMs: 15_000
-    })
+    const response = await runSerializedWebSessionFocusOperation(
+      intentOwner,
+      args.worktreeId,
+      async () => {
+        if (!isWebSessionFocusIntentTokenValid(intentOwner, args.worktreeId, focusToken)) {
+          return null
+        }
+        return await callEnvironment({
+          method: 'browser.tabCreate',
+          params: {
+            worktree: toRuntimeWorktreeSelector(args.worktreeId),
+            url: args.url,
+            profileId: args.profileId ?? undefined,
+            // Why: a later queued focus action must win before this request reaches the host.
+            activate: isWebSessionFocusIntentTokenCurrent(intentOwner, args.worktreeId, focusToken),
+            // Why: place the new browser in the clicked split group so the host snapshot is authoritative for it (no left-snap).
+            ...(args.targetGroupId ? { targetGroupId: args.targetGroupId } : {}),
+            // Why: web clients need the local tab now; waiting for host webview registration makes the workspace appear to close.
+            waitForRegistration: false
+          },
+          timeoutMs: 15_000
+        })
+      }
+    )
+    if (!response) {
+      return false
+    }
     const created = unwrapRuntimeRpcResult(response as RuntimeRpcResponse<BrowserTabCreateResult>)
+    if (!isWebSessionFocusIntentTokenValid(intentOwner, args.worktreeId, focusToken)) {
+      return true
+    }
     // Why: record focus intent (tab id === browserPageId on a headless host) so the reconcile follows to the new browser tab.
     if (matchesWebSessionIntentOwner(intentOwner)) {
-      recordWebSessionFocusIntent(intentOwner, args.worktreeId, created.browserPageId)
+      focusRecorded = recordReservedWebSessionFocusIntent(
+        intentOwner,
+        args.worktreeId,
+        focusToken,
+        created.browserPageId
+      )
     }
     stageWebRuntimeBrowserTab({
       environmentId,
@@ -473,6 +559,7 @@ export async function createWebRuntimeSessionBrowserTab(args: {
       title: args.stagedTitle,
       focusAddressBar: args.stagedFocusAddressBar,
       restoreFocus:
+        focusRecorded &&
         shouldSelectWorktree &&
         (stagedFromWorktreeId === args.worktreeId ||
           useAppStore.getState().activeWorktreeId === args.worktreeId)
@@ -491,6 +578,8 @@ export async function createWebRuntimeSessionBrowserTab(args: {
       )
     }
     return false
+  } finally {
+    releaseWebSessionFocusIntentToken(intentOwner, args.worktreeId, focusToken)
   }
 }
 
@@ -532,6 +621,7 @@ function stageWebRuntimeBrowserTab(args: {
   const browserTab = useAppStore.getState().createBrowserTab(args.worktreeId, url, {
     title: args.title ?? (url === 'about:blank' ? 'New Browser Tab' : url),
     focusAddressBar: args.focusAddressBar ?? true,
+    activate: args.restoreFocus !== false,
     browserRuntimeEnvironmentId: args.environmentId,
     targetGroupId: args.targetGroupId
   })
@@ -634,6 +724,38 @@ export async function refreshWebRuntimeSessionTabsSnapshot(
     // Why: host creation already succeeded; the long-lived session.tabs subscription catches up if this eager refresh fails.
     console.warn(
       '[web-runtime-session] failed to refresh session-tabs snapshot:',
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+}
+
+async function applyAcknowledgedWebRuntimeSessionTabsSnapshot(
+  environmentId: string,
+  worktreeId: string,
+  snapshot: RuntimeMobileSessionTabsResult,
+  expectedEnvironmentPairingRevision: number | undefined
+): Promise<void> {
+  try {
+    if (getRuntimeEnvironmentRevision(environmentId) !== expectedEnvironmentPairingRevision) {
+      return
+    }
+    const {
+      acceptReplayedWebSessionTabsSnapshot,
+      applyFreshWebSessionTabsSnapshot,
+      applyWebSessionTabsStorePatch
+    } = await import('./web-session-tabs-sync')
+    acceptReplayedWebSessionTabsSnapshot(environmentId, worktreeId)
+    if (getRuntimeEnvironmentRevision(environmentId) !== expectedEnvironmentPairingRevision) {
+      return
+    }
+    applyWebSessionTabsStorePatch((state) => {
+      const patch = applyFreshWebSessionTabsSnapshot(state, snapshot, environmentId)
+      return patch === state ? state : patch
+    })
+  } catch (error) {
+    // The subscription preserves the recorded intent if local reconciliation is interrupted.
+    console.warn(
+      '[web-runtime-session] failed to apply acknowledged session-tabs snapshot:',
       error instanceof Error ? error.message : String(error)
     )
   }
@@ -873,8 +995,17 @@ async function callWebRuntimeSessionTabMethod(
   const intentOwner = captureWebSessionIntentOwner(environmentId)
   const callEnvironment = captureRuntimeEnvironmentCall(environmentId, intentOwner.pairingRevision)
   const closeIntentTabIds = new Set<string>()
+  let activationHostTabId: string | null = null
 
   const isClose = method === 'session.tabs.close'
+  const activationToken = isClose
+    ? null
+    : reserveWebSessionFocusIntent(intentOwner, args.worktreeId)
+  const activationIsCurrent = (): boolean =>
+    Boolean(
+      activationToken &&
+      isWebSessionFocusIntentTokenCurrent(intentOwner, args.worktreeId, activationToken)
+    )
   const isLifecycleClose = isClose && args.reason !== 'user'
   if (isLifecycleClose && (!args.publicationEpoch || !args.terminalHandle)) {
     // Why: missing host-generation or terminal-incarnation evidence means keep;
@@ -904,12 +1035,16 @@ async function callWebRuntimeSessionTabMethod(
         worktreeId: args.worktreeId,
         tabId: args.tabId
       }) ?? toHostSessionTabId(args.tabId)
+    activationHostTabId = activationToken ? hostTabId : null
     if (isClose) {
       // Why: suppress until the host confirms removal, else an in-flight pre-close snapshot flashes the tab back.
       closeIntentTabIds.add(hostTabId)
       recordWebSessionCloseIntent(intentOwner, args.worktreeId, hostTabId, Date.now())
     }
-    const response = await callEnvironment({
+    if (activationToken && matchesWebSessionIntentOwner(intentOwner)) {
+      recordReservedWebSessionFocusIntent(intentOwner, args.worktreeId, activationToken, hostTabId)
+    }
+    const request = {
       // Why: old hosts cannot route this additive method, so a generation
       // cutover fails closed before their destructive legacy close handler.
       method: isLifecycleClose ? 'session.tabs.closeLifecycle' : method,
@@ -937,12 +1072,40 @@ async function callWebRuntimeSessionTabMethod(
             : {})
       },
       timeoutMs: 15_000
-    })
+    }
+    const response = activationToken
+      ? await runSerializedWebSessionFocusOperation(
+          intentOwner,
+          args.worktreeId,
+          async () => {
+            if (!activationIsCurrent()) {
+              return null
+            }
+            return await callEnvironment(request)
+          },
+          { supersededResult: null }
+        )
+      : await callEnvironment(request)
+    if (!response) {
+      return true
+    }
     const result = unwrapRuntimeRpcResult(
-      response as RuntimeRpcResponse<RuntimeMobileSessionTabCloseResult | undefined>
+      response as RuntimeRpcResponse<
+        RuntimeMobileSessionTabsResult | RuntimeMobileSessionTabCloseResult | undefined
+      >
     )
+    if (activationToken && activationIsCurrent() && matchesWebSessionIntentOwner(intentOwner)) {
+      recordReservedWebSessionFocusIntent(intentOwner, args.worktreeId, activationToken, hostTabId)
+      await applyAcknowledgedWebRuntimeSessionTabsSnapshot(
+        environmentId,
+        args.worktreeId,
+        result as RuntimeMobileSessionTabsResult,
+        intentOwner.pairingRevision
+      )
+    }
     if (isClose) {
-      if (result?.refused === true && result.snapshotRepublished === true) {
+      const closeResult = result as RuntimeMobileSessionTabCloseResult | undefined
+      if (closeResult?.refused === true && closeResult.snapshotRepublished === true) {
         // Why: the host kept an authoritative live PTY. Stop hiding its mirror
         // only when it republished; dead-leaf refusals must stay suppressed.
         clearWebSessionCloseIntent(intentOwner, args.worktreeId, immediateHostTabId)
@@ -966,11 +1129,31 @@ async function callWebRuntimeSessionTabMethod(
         expectedEnvironmentPairingRevision: intentOwner.pairingRevision
       })
     }
+    if (activationToken && activationHostTabId) {
+      if (
+        error instanceof RuntimeRpcCallError &&
+        !AMBIGUOUS_ACTIVATION_RPC_ERROR_CODES.has(error.code)
+      ) {
+        clearReservedWebSessionFocusIntent(intentOwner, args.worktreeId, activationToken)
+      } else if (activationIsCurrent() && matchesWebSessionIntentOwner(intentOwner)) {
+        // Why: transport loss after host commit is ambiguous, so renew intent consumed by a racing snapshot.
+        recordReservedWebSessionFocusIntent(
+          intentOwner,
+          args.worktreeId,
+          activationToken,
+          activationHostTabId
+        )
+      }
+    }
     console.warn(
       `[web-runtime-session] failed to ${isClose ? 'close' : 'activate'} tab:`,
       error instanceof Error ? error.message : String(error)
     )
     return false
+  } finally {
+    if (activationToken) {
+      releaseWebSessionFocusIntentToken(intentOwner, args.worktreeId, activationToken)
+    }
   }
 }
 

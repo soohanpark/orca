@@ -5,9 +5,17 @@ import {
   resetWebSessionCloseIntentForTests
 } from './web-session-close-intent'
 import {
+  _getWebSessionFocusOperationTrackingCountsForTest,
+  clearReservedWebSessionFocusIntent,
+  clearWebSessionFocusIntent,
+  consumeWebSessionFocusIntent,
+  isWebSessionFocusIntentTokenCurrent,
   peekWebSessionFocusIntent,
+  recordReservedWebSessionFocusIntent,
   recordWebSessionFocusIntent,
-  resetWebSessionFocusIntentForTests
+  reserveWebSessionFocusIntent,
+  resetWebSessionFocusIntentForTests,
+  runSerializedWebSessionFocusOperation
 } from './web-session-focus-intent'
 import {
   recordWebSessionReorderIntent,
@@ -45,6 +53,90 @@ describe('web session intent ownership', () => {
     })
     expect(peekWebSessionFocusIntent(OWNER_A_REPAIRED, WORKTREE_ID)).toBeNull()
     expect(peekWebSessionFocusIntent(OWNER_B, WORKTREE_ID)).toBeNull()
+  })
+
+  it('does not let an older focus operation overwrite or clear newer intent', () => {
+    const older = reserveWebSessionFocusIntent(OWNER_A, WORKTREE_ID)
+    expect(older).not.toBeNull()
+    recordReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, older!, 'host-tab-old')
+
+    recordWebSessionFocusIntent(OWNER_A, WORKTREE_ID, 'host-tab-new')
+
+    expect(recordReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, older!, 'host-tab-old')).toBe(
+      false
+    )
+    clearReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, older!)
+    expect(peekWebSessionFocusIntent(OWNER_A, WORKTREE_ID)).toEqual({
+      hostTabId: 'host-tab-new'
+    })
+  })
+
+  it('consumes rendered intent without canceling its queued operation token', () => {
+    const token = reserveWebSessionFocusIntent(OWNER_A, WORKTREE_ID)!
+    recordReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, token, 'host-tab')
+
+    consumeWebSessionFocusIntent(OWNER_A, WORKTREE_ID)
+
+    expect(peekWebSessionFocusIntent(OWNER_A, WORKTREE_ID)).toBeNull()
+    expect(isWebSessionFocusIntentTokenCurrent(OWNER_A, WORKTREE_ID, token)).toBe(true)
+  })
+
+  it('cancels every reservation when its worktree is removed', () => {
+    const older = reserveWebSessionFocusIntent(OWNER_A, WORKTREE_ID)!
+    const latest = reserveWebSessionFocusIntent(OWNER_A, WORKTREE_ID)!
+
+    clearWebSessionFocusIntent(OWNER_A, WORKTREE_ID)
+
+    expect(isWebSessionFocusIntentTokenCurrent(OWNER_A, WORKTREE_ID, latest)).toBe(false)
+    expect(recordReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, older, 'older')).toBe(false)
+    expect(recordReservedWebSessionFocusIntent(OWNER_A, WORKTREE_ID, latest, 'latest')).toBe(false)
+  })
+
+  it('coalesces obsolete queued activations during a burst', async () => {
+    let releaseFirst!: () => void
+    const firstBarrier = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const executed = ['first']
+    const first = runSerializedWebSessionFocusOperation(OWNER_A, WORKTREE_ID, async () => {
+      await firstBarrier
+      return 'first'
+    })
+    const obsolete = Array.from({ length: 100 }, (_, index) =>
+      runSerializedWebSessionFocusOperation<string | null>(
+        OWNER_A,
+        WORKTREE_ID,
+        async () => {
+          executed.push(`obsolete-${index}`)
+          return `obsolete-${index}`
+        },
+        { supersededResult: null }
+      )
+    )
+    const latest = runSerializedWebSessionFocusOperation<string | null>(
+      OWNER_A,
+      WORKTREE_ID,
+      async () => {
+        executed.push('latest')
+        return 'latest'
+      },
+      { supersededResult: null }
+    )
+
+    expect(_getWebSessionFocusOperationTrackingCountsForTest()).toEqual({
+      partitions: 1,
+      queued: 1
+    })
+    releaseFirst()
+
+    await expect(first).resolves.toBe('first')
+    await expect(Promise.all(obsolete)).resolves.toEqual(Array.from({ length: 100 }, () => null))
+    await expect(latest).resolves.toBe('latest')
+    expect(executed).toEqual(['first', 'latest'])
+    expect(_getWebSessionFocusOperationTrackingCountsForTest()).toEqual({
+      partitions: 0,
+      queued: 0
+    })
   })
 
   it('isolates reorder intents across runtimes and same-id re-pairs', () => {

@@ -18,6 +18,8 @@ import {
   splitWebRuntimeTerminal
 } from './web-runtime-session'
 import {
+  clearWebSessionFocusIntent,
+  consumeWebSessionFocusIntent,
   peekWebSessionFocusIntent,
   resetWebSessionFocusIntentForTests
 } from './web-session-focus-intent'
@@ -342,6 +344,7 @@ describe('createWebRuntimeSessionBrowserTab', () => {
     expect(mocks.createBrowserTab).toHaveBeenCalledWith(WORKTREE_ID, 'https://example.com/', {
       title: 'https://example.com/',
       focusAddressBar: true,
+      activate: true,
       browserRuntimeEnvironmentId: ENVIRONMENT_ID
     })
     expect(mocks.setRemoteBrowserPageHandle).toHaveBeenCalledWith('local-page-1', {
@@ -559,7 +562,9 @@ describe('createWebRuntimeSessionBrowserTab', () => {
       {
         title: 'Search Google',
         focusAddressBar: false,
-        browserRuntimeEnvironmentId: ENVIRONMENT_ID
+        activate: false,
+        browserRuntimeEnvironmentId: ENVIRONMENT_ID,
+        targetGroupId: undefined
       }
     )
     expect(runtimeCall.mock.calls[0][0].params).not.toHaveProperty('stagedTitle')
@@ -586,6 +591,38 @@ describe('createWebRuntimeSessionBrowserTab', () => {
 
     expect(consoleWarn).toHaveBeenCalledWith('[web-runtime-session] failed to create browser tab')
     expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain('private')
+  })
+
+  it('does not stage a browser response after the host removes its worktree', async () => {
+    let resolveCreate!: (value: { id: string; ok: true; result: { browserPageId: string } }) => void
+    const createResponse = new Promise<{
+      id: string
+      ok: true
+      result: { browserPageId: string }
+    }>((resolve) => {
+      resolveCreate = resolve
+    })
+    const runtimeCall = vi.fn().mockImplementationOnce(() => createResponse)
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    const create = createWebRuntimeSessionBrowserTab({
+      worktreeId: WORKTREE_ID,
+      url: 'https://example.com/'
+    })
+    await vi.waitFor(() => expect(runtimeCall).toHaveBeenCalledTimes(1))
+    clearWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)
+    resolveCreate({
+      id: 'create',
+      ok: true,
+      result: { browserPageId: 'removed-worktree-page' }
+    })
+
+    await expect(create).resolves.toBe(true)
+    expect(mocks.createBrowserTab).not.toHaveBeenCalled()
+    expect(mocks.setRemoteBrowserPageHandle).not.toHaveBeenCalled()
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -1599,6 +1636,7 @@ describe('moveWebRuntimeSessionTab', () => {
 
 describe('web runtime session tab actions', () => {
   beforeEach(() => {
+    resetWebSessionFocusIntentForTests()
     vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
     mocks.getState.mockReturnValue({
       settings: {
@@ -1613,8 +1651,322 @@ describe('web runtime session tab actions', () => {
   })
 
   afterEach(() => {
+    resetWebSessionFocusIntentForTests()
     vi.unstubAllGlobals()
     vi.clearAllMocks()
+  })
+
+  it('holds caller focus through remote tab activation and replays the host snapshot', async () => {
+    const snapshot = makeSnapshot()
+    let resolveActivation!: (value: { id: string; ok: true; result: object }) => void
+    const activationResponse = new Promise<{ id: string; ok: true; result: object }>((resolve) => {
+      resolveActivation = resolve
+    })
+    const runtimeCall = vi.fn().mockImplementationOnce(() => activationResponse)
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    const activation = activateWebRuntimeSessionTab({
+      worktreeId: WORKTREE_ID,
+      tabId: 'local-browser-unified'
+    })
+
+    await vi.waitFor(() =>
+      expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+        hostTabId: 'host-browser-unified'
+      })
+    )
+    resolveActivation({ id: 'activate', ok: true, result: snapshot })
+    await expect(activation).resolves.toBe(true)
+
+    expect(mocks.acceptReplayedWebSessionTabsSnapshot).toHaveBeenCalledWith(
+      ENVIRONMENT_ID,
+      WORKTREE_ID
+    )
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
+    expect(mocks.applyFreshWebSessionTabsSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      snapshot,
+      ENVIRONMENT_ID
+    )
+  })
+
+  it('serializes overlapping activations so the newest host selection wins', async () => {
+    const firstSnapshot = { ...makeSnapshot(), snapshotVersion: 2 }
+    const secondSnapshot = { ...makeSnapshot(), snapshotVersion: 3 }
+    let resolveFirst!: (value: { id: string; ok: true; result: object }) => void
+    let resolveSecond!: (value: { id: string; ok: true; result: object }) => void
+    const firstResponse = new Promise<{ id: string; ok: true; result: object }>((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondResponse = new Promise<{ id: string; ok: true; result: object }>((resolve) => {
+      resolveSecond = resolve
+    })
+    const runtimeCall = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse)
+      .mockImplementationOnce(() => secondResponse)
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockImplementation(
+      (_state, args: { tabId: string }) => `host-${args.tabId}`
+    )
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    const first = activateWebRuntimeSessionTab({
+      worktreeId: WORKTREE_ID,
+      tabId: 'browser-a'
+    })
+    await vi.waitFor(() =>
+      expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+        hostTabId: 'host-browser-a'
+      })
+    )
+    const second = activateWebRuntimeSessionTab({
+      worktreeId: WORKTREE_ID,
+      tabId: 'browser-b'
+    })
+    await vi.waitFor(() =>
+      expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+        hostTabId: 'host-browser-b'
+      })
+    )
+
+    // Model A's subscription publication arriving before queued activation B reaches the host.
+    consumeWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toBeNull()
+
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
+    resolveFirst({ id: 'activate-a', ok: true, result: firstSnapshot })
+    await expect(first).resolves.toBe(true)
+    await vi.waitFor(() => expect(runtimeCall).toHaveBeenCalledTimes(2))
+    resolveSecond({ id: 'activate-b', ok: true, result: secondSnapshot })
+    await expect(second).resolves.toBe(true)
+
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+      hostTabId: 'host-browser-b'
+    })
+    expect(mocks.applyFreshWebSessionTabsSnapshot).toHaveBeenCalledTimes(1)
+    expect(mocks.applyFreshWebSessionTabsSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      secondSnapshot,
+      ENVIRONMENT_ID
+    )
+  })
+
+  it.each(['runtime_timeout', 'remote_runtime_unavailable'])(
+    'renews focus intent after a racing snapshot and ambiguous %s response',
+    async (code) => {
+      let resolveActivation!: (value: {
+        id: string
+        ok: false
+        error: { code: string; message: string }
+      }) => void
+      const activationResponse = new Promise<{
+        id: string
+        ok: false
+        error: { code: string; message: string }
+      }>((resolve) => {
+        resolveActivation = resolve
+      })
+      const runtimeCall = vi.fn().mockImplementationOnce(() => activationResponse)
+      vi.stubGlobal('window', {
+        api: { runtimeEnvironments: { call: runtimeCall } }
+      })
+
+      const activation = activateWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified'
+      })
+      await vi.waitFor(() =>
+        expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+          hostTabId: 'host-browser-unified'
+        })
+      )
+      consumeWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)
+      resolveActivation({
+        id: 'activate',
+        ok: false,
+        error: { code, message: 'Activation acknowledgement is unavailable' }
+      })
+
+      await expect(activation).resolves.toBe(false)
+      expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+        hostTabId: 'host-browser-unified'
+      })
+    }
+  )
+
+  it('clears focus intent when the host authoritatively refuses activation', async () => {
+    const runtimeCall = vi.fn().mockResolvedValueOnce({
+      id: 'activate',
+      ok: false,
+      error: { code: 'tab_not_found', message: 'Tab not found' }
+    })
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    await expect(
+      activateWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified'
+      })
+    ).resolves.toBe(false)
+
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toBeNull()
+  })
+
+  it.each([
+    { name: 'success', losesAcknowledgement: false },
+    { name: 'ambiguous failure', losesAcknowledgement: true }
+  ])('lets a later browser create supersede activation $name', async ({ losesAcknowledgement }) => {
+    mocks.getState.mockReturnValue({
+      settings: { activeRuntimeEnvironmentId: ENVIRONMENT_ID },
+      activeWorktreeId: WORKTREE_ID,
+      browserPagesByWorkspace: {},
+      remoteBrowserPageHandlesByPageId: {},
+      createBrowserTab: mocks.createBrowserTab,
+      setRemoteBrowserPageHandle: mocks.setRemoteBrowserPageHandle,
+      focusBrowserTabInWorktree: mocks.focusBrowserTabInWorktree,
+      setActiveWorktree: mocks.setActiveWorktree
+    })
+    mocks.createBrowserTab.mockReturnValue({
+      id: 'local-browser-workspace-1',
+      activePageId: 'local-page-1',
+      pageIds: ['local-page-1']
+    })
+    mocks.applyFreshWebSessionTabsSnapshot.mockImplementation((state) => state)
+    let resolveActivation!: (value: { id: string; ok: true; result: object }) => void
+    let rejectActivation!: (error: Error) => void
+    const activationResponse = new Promise<{ id: string; ok: true; result: object }>(
+      (resolve, reject) => {
+        resolveActivation = resolve
+        rejectActivation = reject
+      }
+    )
+    const runtimeCall = vi.fn().mockImplementation((request: { method: string }) => {
+      if (request.method === 'session.tabs.activate') {
+        return activationResponse
+      }
+      if (request.method === 'browser.tabCreate') {
+        return Promise.resolve({
+          id: 'create',
+          ok: true,
+          result: { browserPageId: 'remote-browser-page-new' }
+        })
+      }
+      return Promise.resolve({ id: 'list', ok: true, result: makeSnapshot() })
+    })
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    const activation = activateWebRuntimeSessionTab({
+      worktreeId: WORKTREE_ID,
+      tabId: 'local-browser-unified'
+    })
+    await vi.waitFor(() => expect(runtimeCall).toHaveBeenCalledTimes(1))
+    const create = createWebRuntimeSessionBrowserTab({
+      worktreeId: WORKTREE_ID,
+      url: 'https://example.com/new'
+    })
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
+
+    if (losesAcknowledgement) {
+      rejectActivation(new Error('connection lost after commit'))
+      await expect(activation).resolves.toBe(false)
+    } else {
+      resolveActivation({ id: 'activate', ok: true, result: makeSnapshot() })
+      await expect(activation).resolves.toBe(true)
+    }
+    await expect(create).resolves.toBe(true)
+    await vi.waitFor(() => expect(runtimeCall).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(mocks.applyFreshWebSessionTabsSnapshot).toHaveBeenCalledTimes(1))
+
+    expect(runtimeCall.mock.calls.map(([request]) => request.method)).toEqual([
+      'session.tabs.activate',
+      'browser.tabCreate',
+      'session.tabs.list'
+    ])
+    expect(runtimeCall.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ params: expect.objectContaining({ activate: true }) })
+    )
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+      hostTabId: 'remote-browser-page-new'
+    })
+  })
+
+  it('lets a later activation supersede browser creation without local focus theft', async () => {
+    mocks.getState.mockReturnValue({
+      settings: { activeRuntimeEnvironmentId: ENVIRONMENT_ID },
+      activeWorktreeId: WORKTREE_ID,
+      browserPagesByWorkspace: {},
+      remoteBrowserPageHandlesByPageId: {},
+      createBrowserTab: mocks.createBrowserTab,
+      setRemoteBrowserPageHandle: mocks.setRemoteBrowserPageHandle,
+      focusBrowserTabInWorktree: mocks.focusBrowserTabInWorktree,
+      setActiveWorktree: mocks.setActiveWorktree
+    })
+    mocks.createBrowserTab.mockReturnValue({
+      id: 'local-browser-workspace-1',
+      activePageId: 'local-page-1',
+      pageIds: ['local-page-1']
+    })
+    mocks.applyFreshWebSessionTabsSnapshot.mockImplementation((state) => state)
+    let resolveCreate!: (value: { id: string; ok: true; result: { browserPageId: string } }) => void
+    const createResponse = new Promise<{
+      id: string
+      ok: true
+      result: { browserPageId: string }
+    }>((resolve) => {
+      resolveCreate = resolve
+    })
+    const runtimeCall = vi.fn().mockImplementation((request: { method: string }) => {
+      if (request.method === 'browser.tabCreate') {
+        return createResponse
+      }
+      if (request.method === 'session.tabs.activate') {
+        return Promise.resolve({ id: 'activate', ok: true, result: makeSnapshot() })
+      }
+      return Promise.resolve({ id: 'list', ok: true, result: makeSnapshot() })
+    })
+    vi.stubGlobal('window', {
+      api: { runtimeEnvironments: { call: runtimeCall } }
+    })
+
+    const create = createWebRuntimeSessionBrowserTab({
+      worktreeId: WORKTREE_ID,
+      url: 'https://example.com/new'
+    })
+    await vi.waitFor(() => expect(runtimeCall).toHaveBeenCalledTimes(1))
+    const activation = activateWebRuntimeSessionTab({
+      worktreeId: WORKTREE_ID,
+      tabId: 'local-browser-unified'
+    })
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
+    resolveCreate({
+      id: 'create',
+      ok: true,
+      result: { browserPageId: 'remote-browser-page-new' }
+    })
+
+    await expect(create).resolves.toBe(true)
+    await expect(activation).resolves.toBe(true)
+    expect(mocks.createBrowserTab).toHaveBeenCalledWith(
+      WORKTREE_ID,
+      'https://example.com/new',
+      expect.objectContaining({ activate: false })
+    )
+    expect(runtimeCall.mock.calls.map(([request]) => request.method)).toEqual([
+      'browser.tabCreate',
+      'session.tabs.list',
+      'session.tabs.activate'
+    ])
+    expect(peekWebSessionFocusIntent({ environmentId: ENVIRONMENT_ID }, WORKTREE_ID)).toEqual({
+      hostTabId: 'host-browser-unified'
+    })
   })
 
   it('maps mirrored local browser unified ids for activate and close', async () => {
@@ -1623,7 +1975,7 @@ describe('web runtime session tab actions', () => {
       .mockResolvedValueOnce({
         id: 'activate',
         ok: true,
-        result: {}
+        result: makeSnapshot()
       })
       .mockResolvedValueOnce({
         id: 'close',
