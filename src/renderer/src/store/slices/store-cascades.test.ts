@@ -224,7 +224,9 @@ describe('removeWorktree cascade', () => {
       id: 'preserved-branch:feature/test:def456',
       description: expect.anything(),
       dismissible: true,
-      duration: Infinity
+      duration: Infinity,
+      onDismiss: expect.any(Function),
+      onAutoClose: expect.any(Function)
     })
   })
 

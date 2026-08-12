@@ -80,7 +80,8 @@ function PreservedBranchToastBody({
 export function showPreservedBranchToast(
   result: RemoveWorktreeResult | undefined,
   worktree: PreservedBranchWorktree | undefined,
-  onForceDelete: (branchName: string, expectedHead: string) => void
+  onForceDelete: (branchName: string, expectedHead: string) => void,
+  onRelease?: () => void
 ): void {
   const preservedBranch = result?.preservedBranch
   const branch = preservedBranch?.branchName
@@ -96,8 +97,16 @@ export function showPreservedBranchToast(
     ? translate('auto.store.slices.worktrees.e50495aae6', 'Force Delete Branch')
     : undefined
   const description = getPreservedBranchDescription(branch, targetName, isWorkspace)
+  let reviewCompleted = false
+  const completeReview = (): void => {
+    if (!reviewCompleted) {
+      reviewCompleted = true
+      onRelease?.()
+    }
+  }
   const forceDelete = expectedHead
     ? (): void => {
+        reviewCompleted = true
         onForceDelete(branch, expectedHead)
         toast.dismiss(toastId)
       }
@@ -113,6 +122,8 @@ export function showPreservedBranchToast(
       />
     ),
     dismissible: true,
+    onDismiss: completeReview,
+    onAutoClose: completeReview,
     ...(expectedHead ? { duration: Infinity } : {})
   })
 }

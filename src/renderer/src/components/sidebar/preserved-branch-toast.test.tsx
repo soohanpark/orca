@@ -50,6 +50,7 @@ afterEach(() => {
 describe('showPreservedBranchToast', () => {
   it('renders the branch recovery action below the long description', () => {
     const onForceDelete = vi.fn()
+    const onRelease = vi.fn()
     const result: RemoveWorktreeResult = {
       preservedBranch: {
         branchName: 'feat/notes-send-any-running-agent',
@@ -63,7 +64,8 @@ describe('showPreservedBranchToast', () => {
         displayName: 'Send review notes to any running agent of a worktree',
         isMainWorktree: false
       },
-      onForceDelete
+      onForceDelete,
+      onRelease
     )
     const body = renderToastBody()
 
@@ -84,16 +86,21 @@ describe('showPreservedBranchToast', () => {
     expect(toast.dismiss).toHaveBeenCalledWith(
       'preserved-branch:feat/notes-send-any-running-agent:abc123'
     )
+    vi.mocked(toast.warning)
+      .mock.calls.at(-1)?.[1]
+      ?.onDismiss?.({} as never)
+    expect(onRelease).not.toHaveBeenCalled()
   })
 
   it('does not show the force-delete action without the preserved head', () => {
+    const onRelease = vi.fn()
     const result: RemoveWorktreeResult = {
       preservedBranch: {
         branchName: 'feature/test'
       }
     }
 
-    showPreservedBranchToast(result, undefined, vi.fn())
+    showPreservedBranchToast(result, undefined, vi.fn(), onRelease)
     const body = renderToastBody()
 
     expect(body.textContent).not.toContain('Force Delete Branch')
@@ -101,5 +108,9 @@ describe('showPreservedBranchToast', () => {
       'Worktree deleted, branch kept',
       expect.not.objectContaining({ duration: Infinity })
     )
+    const options = vi.mocked(toast.warning).mock.calls.at(-1)?.[1]
+    options?.onDismiss?.({} as never)
+    options?.onAutoClose?.({} as never)
+    expect(onRelease).toHaveBeenCalledOnce()
   })
 })

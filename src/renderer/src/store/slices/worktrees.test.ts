@@ -132,6 +132,7 @@ const mockApi = {
     remove: vi.fn().mockResolvedValue(undefined),
     forgetLocal: vi.fn().mockResolvedValue({}),
     forceDeletePreservedBranch: vi.fn().mockResolvedValue({ deleted: true }),
+    releasePreservedBranchCleanups: vi.fn().mockResolvedValue({ released: 0 }),
     resolvePrBase: vi.fn(),
     resolveMrBase: vi.fn(),
     updateMeta: vi.fn().mockResolvedValue(undefined),
@@ -6261,56 +6262,6 @@ describe('worktree remote runtime mutations', () => {
     expect(store.getState().worktreesByRepo.repo1).toEqual([])
   })
 
-  it('documents new-client/old-host skew without adding a release RPC', async () => {
-    const store = createTestStore()
-    const worktree = makeWorktree({
-      id: 'repo1::/path/legacy-host-wt',
-      repoId: 'repo1',
-      path: '/path/legacy-host-wt'
-    })
-    const oldHostCleanupRoutes = new Map<string, { branchName: string; head: string }>()
-    runtimeEnvironmentCall.mockImplementation(async ({ method }: RuntimeEnvironmentCallRequest) => {
-      if (method !== 'worktree.rm') {
-        throw Object.assign(new Error(`Method not found: ${method}`), { code: 'method_not_found' })
-      }
-      oldHostCleanupRoutes.set(worktree.id, {
-        branchName: 'feature/legacy-host',
-        head: 'legacy-head'
-      })
-      return {
-        id: 'legacy-rm',
-        ok: true,
-        result: {
-          preservedBranch: { branchName: 'feature/legacy-host', head: 'legacy-head' }
-        },
-        _meta: { runtimeId: 'legacy-runtime' }
-      }
-    })
-    store.setState({
-      settings: { activeRuntimeEnvironmentId: 'env-1' } as never,
-      worktreesByRepo: { repo1: [worktree] }
-    } as Partial<AppState>)
-
-    const result = await store.getState().removeWorktree(worktree.id)
-
-    expect(result).toEqual({
-      ok: true,
-      preservedBranch: {
-        branchName: 'feature/legacy-host',
-        head: 'legacy-head',
-        hostId: 'runtime:env-1',
-        runtimeEnvironmentId: 'env-1'
-      }
-    })
-    expect(runtimeEnvironmentCall.mock.calls.map(([request]) => request.method)).toEqual([
-      'repo.hooksCheck',
-      'worktree.rm'
-    ])
-    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
-    // An already-deployed old host cannot be taught release; update or restart reclaims this legacy map.
-    expect(oldHostCleanupRoutes.size).toBe(1)
-  })
-
   it('removes a HUB-owned SSH worktree through its exact HUB transport owner', async () => {
     const store = createTestStore()
     const wt = makeWorktree({
@@ -6368,10 +6319,7 @@ describe('worktree remote runtime mutations', () => {
 
     const forceResult = await store
       .getState()
-      .forceDeletePreservedBranch(wt.id, 'feature/nested', 'saved-head', {
-        hostId: 'ssh:hub-private-target',
-        runtimeEnvironmentId: 'owner-hub'
-      })
+      .forceDeletePreservedBranch(wt.id, 'feature/nested', 'saved-head')
 
     expect(forceResult).toEqual({ ok: true, deleted: true })
     expect(runtimeEnvironmentCall).toHaveBeenNthCalledWith(2, {
@@ -6382,6 +6330,77 @@ describe('worktree remote runtime mutations', () => {
         branchName: 'feature/nested',
         expectedHead: 'saved-head',
         hostId: 'ssh:hub-private-target'
+      },
+      timeoutMs: 15_000
+    })
+  })
+
+  it('releases renderer authority when an older paired runtime lacks the release method', async () => {
+    const store = createTestStore()
+    const wt = makeWorktree({
+      id: 'repo-remote::/srv/old-runtime-wt',
+      repoId: 'repo-remote',
+      path: '/srv/old-runtime-wt',
+      hostId: 'ssh:old-runtime-target',
+      runtimeOwnerEnvironmentId: 'old-runtime'
+    })
+    runtimeEnvironmentCall
+      .mockResolvedValueOnce({
+        id: 'rpc-rm-old-runtime',
+        ok: true,
+        result: {
+          preservedBranch: { branchName: 'feature/old-runtime', head: 'saved-head' }
+        },
+        _meta: { runtimeId: 'runtime-old' }
+      })
+      .mockResolvedValueOnce({
+        id: 'rpc-release-old-runtime',
+        ok: false,
+        error: {
+          code: 'method_not_found',
+          message: 'Unknown method: worktree.releasePreservedBranchCleanups'
+        },
+        _meta: { runtimeId: 'runtime-old' }
+      })
+    store.setState({
+      worktreesByRepo: { 'repo-remote': [wt] }
+    } as Partial<AppState>)
+
+    const result = await store.getState().removeWorktree(wt.id)
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(1)
+
+    await store.getState().releasePreservedBranchCleanups([
+      {
+        worktreeId: wt.id,
+        branchName: 'feature/old-runtime',
+        expectedHead: 'saved-head',
+        hostId: 'ssh:old-runtime-target',
+        runtimeEnvironmentId: 'old-runtime'
+      }
+    ])
+
+    expect(result).toEqual({
+      ok: true,
+      preservedBranch: {
+        branchName: 'feature/old-runtime',
+        head: 'saved-head',
+        hostId: 'ssh:old-runtime-target',
+        runtimeEnvironmentId: 'old-runtime'
+      }
+    })
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
+    expect(runtimeEnvironmentCall).toHaveBeenNthCalledWith(2, {
+      selector: 'old-runtime',
+      method: 'worktree.releasePreservedBranchCleanups',
+      params: {
+        cleanups: [
+          {
+            worktree: `id:${wt.id}`,
+            branchName: 'feature/old-runtime',
+            expectedHead: 'saved-head',
+            hostId: 'ssh:old-runtime-target'
+          }
+        ]
       },
       timeoutMs: 15_000
     })
@@ -6480,7 +6499,18 @@ describe('worktree remote runtime mutations', () => {
       await store.getState().removeWorktree(worktree.id)
     }
 
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(8)
+    await store
+      .getState()
+      .releasePreservedBranchCleanups([{ ...cleanups[0], expectedHead: 'stale-head' }])
+    expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(8)
+    await (
+      store.getState() as unknown as {
+        releasePreservedBranchCleanups?: (items: typeof cleanups) => Promise<void>
+      }
+    ).releasePreservedBranchCleanups?.(cleanups)
     expect(getPreservedBranchRuntimeTargetCountForTests()).toBe(0)
+    expect(mockApi.worktrees.releasePreservedBranchCleanups).toHaveBeenCalledOnce()
   })
 
   it('fails HUB-owned SSH removal closed when the exact id has two HUB owners', async () => {
@@ -6513,70 +6543,6 @@ describe('worktree remote runtime mutations', () => {
     })
     expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
     expect(mockApi.worktrees.remove).not.toHaveBeenCalled()
-  })
-
-  it('retries an ambiguous paired removal with the exact instance before forgetting locally', async () => {
-    const store = createTestStore()
-    const wt = makeWorktree({
-      id: 'repo-runtime::/path/preserved',
-      repoId: 'repo-runtime',
-      path: '/path/preserved',
-      hostId: 'runtime:env-1',
-      instanceId: 'instance-preserved'
-    })
-    let removalAttempts = 0
-    runtimeEnvironmentCall.mockImplementation(({ method }: RuntimeEnvironmentCallRequest) => {
-      if (method === 'repo.hooksCheck') {
-        return Promise.resolve({
-          id: 'rpc-hooks',
-          ok: true,
-          result: { hasHooks: false, hooks: null, mayNeedUpdate: false },
-          _meta: { runtimeId: 'runtime-remote' }
-        })
-      }
-      removalAttempts += 1
-      if (removalAttempts === 1) {
-        return Promise.reject(new Error('response lost after host completion'))
-      }
-      return Promise.resolve({
-        id: 'rpc-rm-retry',
-        ok: true,
-        result: {
-          removed: true,
-          preservedBranch: { branchName: 'feature/preserved', head: 'head-preserved' }
-        },
-        _meta: { runtimeId: 'runtime-remote' }
-      })
-    })
-    store.setState({
-      settings: { activeRuntimeEnvironmentId: 'env-1' } as never,
-      worktreesByRepo: { 'repo-runtime': [wt] }
-    } as Partial<AppState>)
-
-    await expect(store.getState().removeWorktree(wt.id)).resolves.toEqual({
-      ok: true,
-      preservedBranch: {
-        branchName: 'feature/preserved',
-        head: 'head-preserved',
-        hostId: 'runtime:env-1',
-        runtimeEnvironmentId: 'env-1'
-      }
-    })
-    const removalCalls = runtimeEnvironmentCall.mock.calls
-      .map((call) => call[0])
-      .filter((call) => call.method === 'worktree.rm')
-    expect(removalCalls).toHaveLength(2)
-    expect(removalCalls.map((call) => call.params)).toEqual([
-      expect.objectContaining({
-        worktree: `id:${wt.id}`,
-        worktreeInstanceId: 'instance-preserved'
-      }),
-      expect.objectContaining({
-        worktree: `id:${wt.id}`,
-        worktreeInstanceId: 'instance-preserved'
-      })
-    ])
-    expect(mockApi.worktrees.forgetLocal).not.toHaveBeenCalled()
   })
 
   it.each(['repo_not_found', 'selector_not_found'])(

@@ -24,6 +24,7 @@ import {
   WorktreeSortOrder,
   WorktreeTeardownMissingTerminalsParams
 } from './worktree-schemas'
+import { WORKTREE_PRESERVED_BRANCH_CLEANUP_METHOD } from './worktree-preserved-branch-cleanup'
 
 export const WORKTREE_METHODS: RpcMethod[] = [
   defineMethod({
@@ -281,12 +282,8 @@ export const WORKTREE_METHODS: RpcMethod[] = [
         params.allowUnverifiedPtyStop === true
       ] as const
       const result = params.hostId
-        ? await runtime.removeManagedWorktree(
-            ...removalArgs,
-            params.hostId,
-            params.worktreeInstanceId
-          )
-        : await runtime.removeManagedWorktree(...removalArgs, undefined, params.worktreeInstanceId)
+        ? await runtime.removeManagedWorktree(...removalArgs, params.hostId)
+        : await runtime.removeManagedWorktree(...removalArgs)
       return { removed: true, ...result }
     }
   }),
@@ -306,5 +303,6 @@ export const WORKTREE_METHODS: RpcMethod[] = [
             params.branchName,
             params.expectedHead
           )
-  })
+  }),
+  WORKTREE_PRESERVED_BRANCH_CLEANUP_METHOD
 ]
