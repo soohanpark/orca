@@ -31,6 +31,11 @@ export function getWorkspaceFileDragActiveSnapshot(): boolean {
   return snapshot
 }
 
+/** Tears the drop zones down without waiting for an event that may never arrive. */
+export function disarmWorkspaceFileDrag(): void {
+  setSnapshot(false)
+}
+
 export function subscribeToWorkspaceFileDragActivity(onChange: () => void): () => void {
   subscribers.add(onChange)
   if (!detachWindowListeners && typeof window !== 'undefined') {
@@ -41,12 +46,14 @@ export function subscribeToWorkspaceFileDragActivity(onChange: () => void): () =
     // first dragenter the payload is always readable.
     window.addEventListener('dragenter', armIfWorkspaceFileDrag, true)
     window.addEventListener('dragend', handleDragFinish, true)
-    window.addEventListener('drop', handleDragFinish, true)
+    // Why: NOT capture — tearing the zones down there unmounts the drop target
+    // before React's delegated onDrop runs at the root, and the drop is lost.
+    window.addEventListener('drop', handleDragFinish)
     detachWindowListeners = () => {
       window.removeEventListener('dragstart', armIfWorkspaceFileDrag)
       window.removeEventListener('dragenter', armIfWorkspaceFileDrag, true)
       window.removeEventListener('dragend', handleDragFinish, true)
-      window.removeEventListener('drop', handleDragFinish, true)
+      window.removeEventListener('drop', handleDragFinish)
     }
   }
   return () => {

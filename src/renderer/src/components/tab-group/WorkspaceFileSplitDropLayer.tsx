@@ -2,7 +2,10 @@ import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties } fr
 import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
 import { getConnectionId } from '@/lib/connection-context'
-import { useWorkspaceFileDragActive } from '@/lib/workspace-file-drag-activity'
+import {
+  disarmWorkspaceFileDrag,
+  useWorkspaceFileDragActive
+} from '@/lib/workspace-file-drag-activity'
 import {
   getWorkspaceFileDragRejectionMessage,
   hasWorkspaceFileDragTypes,
@@ -65,8 +68,13 @@ export default function WorkspaceFileSplitDropLayer({
 
   const handleDrop = useCallback(
     (zone: WorkspaceFilePaneDropZone, dataTransfer: DataTransfer) => {
-      setHoveredZone(null)
+      // Why: read the payload before anything can re-render this handler's own
+      // drop target out from under the gesture.
       const pathsResult = readWorkspaceFileDragPaths(dataTransfer)
+      // Why: this handler stops propagation, so the window-level drop cleanup
+      // never runs — disarm here instead of leaving live bands over the panes.
+      disarmWorkspaceFileDrag()
+      setHoveredZone(null)
       if (pathsResult.status === 'rejected') {
         toast.error(getWorkspaceFileDragRejectionMessage(pathsResult.reason))
         return
