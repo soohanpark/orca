@@ -86,25 +86,35 @@ export async function removeRelayRemoteIfMatches(
     ['config', '--local', '--rename-section', `remote.${remoteName}`, claimedSection],
     repoPath
   )
+  let claimActive = true
+  try {
+    const configuredRemoteUrl = await readClaimedRemoteUrl(git, repoPath, claimedSection)
+    if (configuredRemoteUrl !== expectedRemoteUrl) {
+      throw new Error(`Refusing to remove changed remote "${remoteName}".`)
+    }
 
-  const configuredRemoteUrl = await readClaimedRemoteUrl(git, repoPath, claimedSection)
-  if (configuredRemoteUrl !== expectedRemoteUrl) {
-    await git(
-      ['config', '--local', '--rename-section', claimedSection, `remote.${remoteName}`],
-      repoPath
-    )
-    throw new Error(`Refusing to remove changed remote "${remoteName}".`)
+    const branchConfig = await readBranchRemoteConfig(git, repoPath)
+    if (branchUsesRemote(branchConfig, remoteName, expectedRemoteUrl)) {
+      throw new Error(`Refusing to remove remote "${remoteName}" while a branch uses it.`)
+    }
+
+    await deleteRemoteTrackingRefs(git, repoPath, remoteName)
+    await git(['config', '--local', '--remove-section', claimedSection], repoPath)
+    claimActive = false
+  } catch (error) {
+    if (claimActive) {
+      try {
+        await git(
+          ['config', '--local', '--rename-section', claimedSection, `remote.${remoteName}`],
+          repoPath
+        )
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `Failed to restore remote "${remoteName}".`
+        )
+      }
+    }
+    throw error
   }
-
-  const branchConfig = await readBranchRemoteConfig(git, repoPath)
-  if (branchUsesRemote(branchConfig, remoteName, expectedRemoteUrl)) {
-    await git(
-      ['config', '--local', '--rename-section', claimedSection, `remote.${remoteName}`],
-      repoPath
-    )
-    throw new Error(`Refusing to remove remote "${remoteName}" while a branch uses it.`)
-  }
-
-  await deleteRemoteTrackingRefs(git, repoPath, remoteName)
-  await git(['config', '--local', '--remove-section', claimedSection], repoPath)
 }

@@ -1,5 +1,6 @@
 import type { GitCapabilityCache } from '../shared/git-capability-cache'
 import {
+  decodePreservedBranchCleanupProvenance,
   preservedBranchCleanupConfigKey,
   serializePreservedBranchCleanupProvenance
 } from '../shared/preserved-branch-cleanup-provenance'
@@ -26,13 +27,34 @@ function isMissingConfigValue(error: unknown): boolean {
 async function clearPreparedBranch(
   git: GitExec,
   repoPath: string,
-  branchName: string
+  branchName: string,
+  identity: { worktreeId: string; worktreeInstanceId: string }
 ): Promise<void> {
+  const key = preservedBranchCleanupConfigKey(branchName)
+  let serialized: string
   try {
-    await git(
-      ['config', '--local', '--unset-all', preservedBranchCleanupConfigKey(branchName)],
-      repoPath
-    )
+    serialized = (await git(['config', '--local', '--get', key], repoPath)).stdout.trim()
+  } catch (error) {
+    if (isMissingConfigValue(error)) {
+      return
+    }
+    throw error
+  }
+  let provenance
+  try {
+    provenance = decodePreservedBranchCleanupProvenance(serialized)
+  } catch {
+    return
+  }
+  if (
+    provenance.branchName !== branchName ||
+    provenance.worktreeId !== identity.worktreeId ||
+    provenance.worktreeInstanceId !== identity.worktreeInstanceId
+  ) {
+    return
+  }
+  try {
+    await git(['config', '--local', '--unset-all', key], repoPath)
   } catch (error) {
     if (!isMissingConfigValue(error)) {
       throw error
@@ -84,7 +106,7 @@ export async function removeWorktreeWithPreservedBranchCleanup(
   params: Record<string, unknown>,
   capabilities: GitCapabilityCache
 ): Promise<RemoveWorktreeResult | PreparedPreservedWorktreeRemoval> {
-  parseIdentity(params)
+  const identity = parseIdentity(params)
   const target = await resolveRelayWorktreeRemovalTarget(git, params, capabilities)
   const branchName = normalizeBranchName(target.worktree?.branch)
   const expectedHead = target.worktree?.head ?? ''
@@ -98,7 +120,7 @@ export async function removeWorktreeWithPreservedBranchCleanup(
   const preparedBranchName =
     typeof params.preparedBranchName === 'string' ? params.preparedBranchName : ''
   if (preparedBranchName && preparedBranchName !== branchName) {
-    await clearPreparedBranch(git, target.repoPath, preparedBranchName)
+    await clearPreparedBranch(git, target.repoPath, preparedBranchName, identity)
   }
   return removeResolvedWorktreeOp(git, params, capabilities, target)
 }
