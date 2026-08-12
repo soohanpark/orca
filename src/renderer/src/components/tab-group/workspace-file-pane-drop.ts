@@ -61,13 +61,11 @@ export async function openWorkspaceFilePathsInSplit(
     worktreePath: string | null | undefined
   }
 ): Promise<string | null> {
-  const openable: string[] = []
-  for (const filePath of args.paths) {
-    // Why: a folder drop must not leave an empty split behind, so filter before splitting.
-    if (!(await deps.isDirectory(filePath))) {
-      openable.push(filePath)
-    }
-  }
+  // Why: a folder drop must not leave an empty split behind, so filter before
+  // splitting. Concurrent because isDirectory is a runtime round-trip on SSH
+  // workspaces, and map keeps drop order regardless of settle order.
+  const directoryFlags = await Promise.all(args.paths.map((path) => deps.isDirectory(path)))
+  const openable = args.paths.filter((_, index) => !directoryFlags[index])
   if (openable.length === 0) {
     return null
   }

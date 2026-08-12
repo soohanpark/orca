@@ -92,6 +92,46 @@ describe('openWorkspaceFilePathsInSplit', () => {
     expect(deps.openFile.mock.calls.map((call) => call[1].focusEditor)).toEqual([false, true])
   })
 
+  it('checks the dropped paths concurrently, not one runtime round-trip at a time', async () => {
+    let inFlight = 0
+    let peakInFlight = 0
+    const deps = makeDeps({
+      isDirectory: vi.fn(async () => {
+        inFlight += 1
+        peakInFlight = Math.max(peakInFlight, inFlight)
+        await Promise.resolve()
+        inFlight -= 1
+        return false
+      })
+    })
+    await openWorkspaceFilePathsInSplit(deps, {
+      ...BASE_ARGS,
+      paths: ['/repo/a.ts', '/repo/b.ts', '/repo/c.ts']
+    })
+
+    expect(peakInFlight).toBeGreaterThan(1)
+  })
+
+  it('keeps drop order when the directory checks settle out of order', async () => {
+    const delays: Record<string, number> = { '/repo/a.ts': 30, '/repo/b.ts': 1, '/repo/c.ts': 15 }
+    const deps = makeDeps({
+      isDirectory: vi.fn(
+        (path: string) =>
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), delays[path] ?? 0))
+      )
+    })
+    await openWorkspaceFilePathsInSplit(deps, {
+      ...BASE_ARGS,
+      paths: ['/repo/a.ts', '/repo/b.ts', '/repo/c.ts']
+    })
+
+    expect(deps.openFile.mock.calls.map((call) => call[0].relativePath)).toEqual([
+      'a.ts',
+      'b.ts',
+      'c.ts'
+    ])
+  })
+
   it('does not split when every dropped path is a directory', async () => {
     const deps = makeDeps({ isDirectory: vi.fn(async () => true) })
     const groupId = await openWorkspaceFilePathsInSplit(deps, {
