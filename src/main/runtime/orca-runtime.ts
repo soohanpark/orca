@@ -2131,6 +2131,7 @@ type RuntimeWorktreeRemovalTarget = {
   id: string
   repoId: string
   path: string
+  worktreeInstanceId: string
   pushTarget?: GitPushTarget
 }
 
@@ -2142,12 +2143,13 @@ type RuntimeWorktreeRemovalInFlight = {
 function getRuntimeWorktreeRemovalOptionsKey(
   force: boolean,
   runHooks: boolean,
-  allowUnverifiedPtyStop: boolean
+  allowUnverifiedPtyStop: boolean,
+  worktreeInstanceId?: string
 ): string {
   // Why: a forced retry must not coalesce onto the in-flight attempt that just
   // failed the PTY gate — it would inherit that failure instead of retrying.
   const ptyKey = allowUnverifiedPtyStop ? 'allow-unverified-pty' : 'require-pty-stop'
-  return `${force ? 'force' : 'normal'}:${runHooks ? 'run-hooks' : 'skip-hooks'}:${ptyKey}`
+  return `${force ? 'force' : 'normal'}:${runHooks ? 'run-hooks' : 'skip-hooks'}:${ptyKey}:${worktreeInstanceId ?? 'legacy-instance'}`
 }
 
 // Null executionHostId means host-unaware: path-only callers match any repo, and the first runtime
@@ -2219,7 +2221,9 @@ function listRuntimeFolderWorkspaces(
   })
 }
 
-function parseExactWorktreeIdSelector(selector: string): RuntimeWorktreeRemovalTarget | null {
+function parseExactWorktreeIdSelector(
+  selector: string
+): Omit<RuntimeWorktreeRemovalTarget, 'worktreeInstanceId'> | null {
   const worktreeId = selector.startsWith('id:') ? selector.slice(3) : selector
   const parsed = splitWorktreeId(worktreeId)
   if (!parsed || !parsed.repoId || !parsed.worktreePath) {
@@ -24116,14 +24120,27 @@ export class OrcaRuntimeService {
   }
 
   private async resolveWorktreeRemovalTarget(
-    worktreeSelector: string
+    worktreeSelector: string,
+    requestedWorktreeInstanceId?: string
   ): Promise<RuntimeWorktreeRemovalTarget> {
     try {
       const worktree = await this.resolveWorktreeSelector(worktreeSelector)
+      const meta = this.store?.getWorktreeMeta(worktree.id)
+      const worktreeInstanceId = worktree.instanceId ?? meta?.instanceId ?? randomUUID()
+      if (!worktree.instanceId && !meta?.instanceId) {
+        this.store?.setWorktreeMeta(worktree.id, { instanceId: worktreeInstanceId })
+      }
+      if (
+        !worktreeInstanceId ||
+        (requestedWorktreeInstanceId && requestedWorktreeInstanceId !== worktreeInstanceId)
+      ) {
+        throw new Error('worktree_instance_changed')
+      }
       const removalTarget = {
         id: worktree.id,
         repoId: worktree.repoId,
-        path: worktree.path
+        path: worktree.path,
+        worktreeInstanceId
       }
       return worktree.pushTarget
         ? { ...removalTarget, pushTarget: worktree.pushTarget }
@@ -24134,13 +24151,25 @@ export class OrcaRuntimeService {
       }
       const removalTarget = parseExactWorktreeIdSelector(worktreeSelector)
       const meta = removalTarget ? this.store?.getWorktreeMeta(removalTarget.id) : undefined
-      if (!removalTarget || !meta) {
+      if (!removalTarget || (!meta && !requestedWorktreeInstanceId)) {
         throw error
+      }
+      if (
+        requestedWorktreeInstanceId &&
+        meta?.instanceId !== undefined &&
+        meta.instanceId !== requestedWorktreeInstanceId
+      ) {
+        throw new Error('worktree_instance_changed')
+      }
+      const worktreeInstanceId = requestedWorktreeInstanceId ?? meta?.instanceId ?? randomUUID()
+      if (meta && !meta.instanceId) {
+        this.store?.setWorktreeMeta(removalTarget.id, { instanceId: worktreeInstanceId })
       }
       // Why: delete requests can arrive after Git no longer lists the worktree.
       // Only exact IDs with persisted Orca metadata are accepted here so
       // branch/path selectors cannot resolve to an arbitrary missing path.
-      return meta.pushTarget ? { ...removalTarget, pushTarget: meta.pushTarget } : removalTarget
+      const target = { ...removalTarget, worktreeInstanceId }
+      return meta?.pushTarget ? { ...target, pushTarget: meta.pushTarget } : target
     }
   }
 
@@ -24272,14 +24301,29 @@ export class OrcaRuntimeService {
     // Why (#11960): only an explicit Force Delete waives PTY-stop proof; `force`
     // alone is already set by the ordinary delete confirmation.
     allowUnverifiedPtyStop = false,
-    _hostId?: string
+    hostId?: string,
+    requestedWorktreeInstanceId?: string
   ): Promise<RemoveWorktreeResult & { warning?: string }> {
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
     const store = this.store
-    const removalTarget = await this.resolveWorktreeRemovalTarget(worktreeSelector)
-    const optionsKey = getRuntimeWorktreeRemovalOptionsKey(force, runHooks, allowUnverifiedPtyStop)
+    const parsedHostId = hostId ? parseExecutionHostId(hostId) : undefined
+    if (hostId && !parsedHostId) {
+      throw new Error('selector_not_found')
+    }
+    const normalizedHostId =
+      parsedHostId?.kind === 'runtime' ? LOCAL_EXECUTION_HOST_ID : parsedHostId?.id
+    const removalTarget = await this.resolveWorktreeRemovalTarget(
+      worktreeSelector,
+      requestedWorktreeInstanceId
+    )
+    const optionsKey = getRuntimeWorktreeRemovalOptionsKey(
+      force,
+      runHooks,
+      allowUnverifiedPtyStop,
+      removalTarget.worktreeInstanceId
+    )
     const inFlightRemoval = this.removeManagedWorktreeInFlight.get(removalTarget.id)
     if (inFlightRemoval) {
       if (inFlightRemoval.optionsKey === optionsKey) {
@@ -24294,7 +24338,14 @@ export class OrcaRuntimeService {
       // Why: CLI, mobile and headless serve delete through here rather than the IPC handler; without
       // this span their freezes are as invisible as desktop deletes were before `worktree.remove`.
       return withWorktreeSpan({ stage: 'remove', path: removalTarget.path }, async () => {
-        const repo = store.getRepo(removalTarget.repoId)
+        const repoCandidates = store.getRepos().filter((repo) => repo.id === removalTarget.repoId)
+        const matchingRepos = repoCandidates.filter(
+          (repo) => !normalizedHostId || getRepoExecutionHostId(repo) === normalizedHostId
+        )
+        const repo = matchingRepos.length === 1 ? matchingRepos[0] : undefined
+        if (!repo && repoCandidates.length > 0) {
+          throw new Error('selector_not_found')
+        }
         if (!repo) {
           const orphanHost = parseExecutionHostId(store.getWorktreeMeta(removalTarget.id)?.hostId)
           const sshPtyProvider =
@@ -24546,7 +24597,7 @@ export class OrcaRuntimeService {
           if (
             await isRuntimeWorktreePathMissing(repo, removalTarget.path, localWorktreeGitOptions)
           ) {
-            if (!force && !removedMeta) {
+            if (!force && !removedMeta && !requestedWorktreeInstanceId) {
               // Why: without persisted metadata, require the renderer recovery
               // path before deleting Orca-only state for an unregistered path.
               throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
@@ -24554,13 +24605,15 @@ export class OrcaRuntimeService {
             const recoveryExecGit: PreservedBranchCleanupGitExec = repo.connectionId
               ? (argv, cwd) => provider!.exec(argv, cwd)
               : (argv, cwd) => gitExecFileAsync(argv, { cwd, ...localWorktreeGitOptions })
-            const recoveredCleanup = removedMeta
-              ? await recoverPreservedBranchCleanupProvenance(
-                  recoveryExecGit,
-                  repo.path,
-                  removalTarget.id
-                )
+            const recoveredCleanup = requestedWorktreeInstanceId
+              ? await recoverPreservedBranchCleanupProvenance(recoveryExecGit, repo.path, {
+                  worktreeId: removalTarget.id,
+                  worktreeInstanceId: removalTarget.worktreeInstanceId
+                })
               : null
+            if (!force && !removedMeta && !recoveredCleanup) {
+              throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
+            }
             const cleanupPushTarget = recoveredCleanup?.pushTarget ?? removedPushTarget
             // Why: a manually deleted worktree is already gone from Git and disk.
             // Finish runtime metadata cleanup without requiring force or touching
@@ -24632,7 +24685,8 @@ export class OrcaRuntimeService {
                 branchName,
                 expectedHead,
                 pushTarget,
-                removalTarget.id
+                removalTarget.id,
+                removalTarget.worktreeInstanceId
               ),
             clear: (branchName) =>
               clearPreservedBranchCleanupProvenance(execGit, repo.path, branchName),
@@ -24662,7 +24716,16 @@ export class OrcaRuntimeService {
         }
         if (repo.connectionId) {
           const connectionId = repo.connectionId
-          const remoteRemoveOptions = !deleteBranch ? { deleteBranch } : {}
+          const remoteRemovalOptions = {
+            worktreePath: canonicalWorktreePath,
+            worktreeId: removalTarget.id,
+            worktreeInstanceId: removalTarget.worktreeInstanceId,
+            force,
+            ...(!deleteBranch ? { deleteBranch } : {}),
+            ...(removedPushTarget ? { pushTarget: removedPushTarget } : {})
+          }
+          const preparedRemoval =
+            await provider!.preparePreservedBranchWorktreeRemoval(remoteRemovalOptions)
           const removalGate = await this.acquireFileWatcherRemoval(
             canonicalWorktreePath,
             connectionId
@@ -24670,29 +24733,21 @@ export class OrcaRuntimeService {
           let removalResult: RemoveWorktreeResult
           let removalCompleted = false
           try {
-            removalResult = await removeWithPreservedBranchCleanupProvenance({
-              branchName: deleteBranch ? registeredWorktree.branch : undefined,
-              expectedHead: registeredWorktree.head,
-              pushTarget: removedPushTarget,
-              remember: (branchName, expectedHead, pushTarget) =>
-                provider!.rememberPreservedBranchCleanupProvenance(
-                  repo.path,
-                  branchName,
-                  expectedHead,
-                  pushTarget,
-                  removalTarget.id
-                ),
-              clear: (branchName) =>
-                provider!.clearPreservedBranchCleanupProvenance(repo.path, branchName),
-              remove: async () => {
-                await this.stopPtysForDestructiveWorktreeRemoval(removalTarget.id, {
-                  connectionId,
-                  allowUnverifiedStop: allowUnverifiedPtyStop
-                })
-                return Object.keys(remoteRemoveOptions).length > 0
-                  ? provider!.removeWorktree(canonicalWorktreePath, force, remoteRemoveOptions)
-                  : provider!.removeWorktree(canonicalWorktreePath, force)
-              }
+            await this.stopPtysForDestructiveWorktreeRemoval(removalTarget.id, {
+              connectionId,
+              allowUnverifiedStop: allowUnverifiedPtyStop
+            })
+            if (
+              store.getWorktreeMeta(removalTarget.id)?.instanceId !==
+              removalTarget.worktreeInstanceId
+            ) {
+              throw new Error('worktree_instance_changed')
+            }
+            removalResult = await provider!.removeWorktreeWithPreservedBranchCleanup({
+              ...remoteRemovalOptions,
+              ...(preparedRemoval.preparedBranchName
+                ? { preparedBranchName: preparedRemoval.preparedBranchName }
+                : {})
             })
             removalCompleted = true
           } finally {
@@ -24785,7 +24840,7 @@ export class OrcaRuntimeService {
           // retain strict PTY teardown before any recursive fallback deletion.
         }
 
-        const cleanupBranchName = deleteBranch
+        let cleanupBranchName = deleteBranch
           ? refreshedRegisteredWorktree.branch.replace(/^refs\/heads\//, '')
           : undefined
         const cleanupExecGit: PreservedBranchCleanupGitExec = (argv, cwd) =>
@@ -24813,21 +24868,44 @@ export class OrcaRuntimeService {
         const removalGate = await this.acquireFileWatcherRemoval(canonicalWorktreePath)
         let removalCompleted = false
         try {
-          if (cleanupBranchName) {
-            await rememberPreservedBranchCleanupProvenance(
-              cleanupExecGit,
-              repo.path,
-              cleanupBranchName,
-              refreshedRegisteredWorktree.head,
-              removedPushTarget,
-              removalTarget.id
-            )
-          }
           // Why: linked-path deletion is destructive too; PTYs must release every
           // handle before Windows or WSL filesystem cleanup starts.
           await this.stopPtysForDestructiveWorktreeRemoval(removalTarget.id, {
             allowUnverifiedStop: allowUnverifiedPtyStop
           })
+
+          if (
+            store.getWorktreeMeta(removalTarget.id)?.instanceId !== removalTarget.worktreeInstanceId
+          ) {
+            throw new Error('worktree_instance_changed')
+          }
+          const quiescedWorktrees = hasLocalWorktreeGitOptions
+            ? await listWorktreesStrict(repo.path, localWorktreeGitOptions)
+            : await listWorktreesStrict(repo.path)
+          const quiescedWorktree = findRegisteredDeletableWorktree(
+            repo.path,
+            canonicalWorktreePath,
+            quiescedWorktrees
+          )
+          if (!quiescedWorktree) {
+            throw new Error(
+              `Worktree registration changed during deletion: ${canonicalWorktreePath}. Retry deletion.`
+            )
+          }
+          cleanupBranchName = deleteBranch
+            ? quiescedWorktree.branch.replace(/^refs\/heads\//, '')
+            : undefined
+          if (cleanupBranchName) {
+            await rememberPreservedBranchCleanupProvenance(
+              cleanupExecGit,
+              repo.path,
+              cleanupBranchName,
+              quiescedWorktree.head,
+              removedPushTarget,
+              removalTarget.id,
+              removalTarget.worktreeInstanceId
+            )
+          }
 
           if (linkedPaths.length > 0) {
             await removeWorktreeLinkedPaths(canonicalWorktreePath, linkedPaths)
@@ -24838,12 +24916,12 @@ export class OrcaRuntimeService {
               ...(!deleteBranch ? { deleteBranch } : {}),
               // Why: removal already validated the Git row under the selected
               // project runtime; keep branch cleanup on that same canonical row.
-              knownRemovedWorktree: refreshedRegisteredWorktree,
+              knownRemovedWorktree: quiescedWorktree,
               ...localWorktreeGitOptions
             }
             removalResult = this.preserveBranchHeadFallback(
               await removeWorktree(repo.path, canonicalWorktreePath, force, removeOptions),
-              refreshedRegisteredWorktree.head
+              quiescedWorktree.head
             )
           } catch (error) {
             // Why: Git for Windows can deregister a clean worktree before its
@@ -24854,14 +24932,14 @@ export class OrcaRuntimeService {
               canonicalWorktreePath,
               repoPath: repo.path,
               localWorktreeGitOptions,
-              registeredWorktree: refreshedRegisteredWorktree,
+              registeredWorktree: quiescedWorktree,
               deleteBranch,
               closeWatcher: (worktreePath) => this.closeFileWatchersForRemoval(worktreePath)
             })
             if (recoveredRemovalResult) {
               removalResult = this.preserveBranchHeadFallback(
                 recoveredRemovalResult,
-                refreshedRegisteredWorktree.head
+                quiescedWorktree.head
               )
               removalCompleted = true
             } else if (isOrphanedWorktreeError(error)) {

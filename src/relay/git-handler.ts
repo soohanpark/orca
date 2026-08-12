@@ -43,6 +43,8 @@ import {
   removeWorktreeOp,
   worktreeIsCleanOp
 } from './git-handler-worktree-ops'
+import { removeWorktreeWithPreservedBranchCleanup as removeWorktreeWithCleanupOp } from './git-handler-preserved-worktree-removal'
+import { removeRelayRemoteIfMatches } from './git-handler-remote-removal'
 import { annotatePrunableWorktreesByExistence } from './git-handler-worktree-list'
 import { forceDeletePreservedRelayBranch } from './git-handler-branch-cleanup'
 import { refreshLocalBaseRefForWorktreeCreateOp } from './git-handler-local-base-ref-refresh'
@@ -100,7 +102,6 @@ import { endSubprocessStdin } from '../shared/subprocess-stdin-write'
 import { clearGitStatusLineStatsCache } from '../shared/git-status-line-stats-cache'
 import { invalidateGitBranchLineTotalInFlight } from '../shared/git-branch-line-total'
 import { streamRelayGitStdout } from './git-stdout-stream'
-import { iterateProcessOutputLines } from '../shared/process-output-field-scanner'
 
 const execFileAsync = promisify(execFile)
 const MAX_GIT_BUFFER = 10 * 1024 * 1024
@@ -259,6 +260,9 @@ export class GitHandler {
     this.dispatcher.onRequest('git.listWorktrees', (p, context) => this.listWorktrees(p, context))
     this.dispatcher.onRequest('git.addWorktree', (p) => this.addWorktree(p))
     this.dispatcher.onRequest('git.removeWorktree', (p) => this.removeWorktree(p))
+    this.dispatcher.onRequest('git.removeWorktreeWithPreservedBranchCleanup', (p) =>
+      this.removeWorktreeWithPreservedBranchCleanup(p)
+    )
     this.dispatcher.onRequest('git.worktreeIsClean', (p) => this.worktreeIsClean(p))
     this.dispatcher.onRequest('git.refreshLocalBaseRefForWorktreeCreate', (p) =>
       this.refreshLocalBaseRefForWorktreeCreate(p)
@@ -1413,50 +1417,9 @@ export class GitHandler {
   }
 
   private async removeRemoteIfMatches(params: Record<string, unknown>) {
-    const repoPath = params.repoPath
-    const remoteName = params.remoteName
-    const expectedRemoteUrl = params.expectedRemoteUrl
-    if (
-      typeof repoPath !== 'string' ||
-      !repoPath ||
-      repoPath.includes('\0') ||
-      typeof remoteName !== 'string' ||
-      !remoteName ||
-      remoteName.includes('\0') ||
-      remoteName === 'origin' ||
-      remoteName === 'upstream' ||
-      typeof expectedRemoteUrl !== 'string' ||
-      !expectedRemoteUrl ||
-      expectedRemoteUrl.includes('\0')
-    ) {
-      throw new Error('Invalid remote cleanup request.')
-    }
-    await this.git(['check-ref-format', `refs/remotes/${remoteName}/orca-validation`], repoPath)
-    const configuredRemoteUrl = (
-      await this.git(['remote', 'get-url', remoteName], repoPath)
-    ).stdout.trim()
-    if (configuredRemoteUrl !== expectedRemoteUrl) {
-      throw new Error(`Refusing to remove changed remote "${remoteName}".`)
-    }
-    let branchRemoteConfig = ''
-    try {
-      branchRemoteConfig = (
-        await this.git(['config', '--get-regexp', '^branch\\..*\\.(remote|pushRemote)$'], repoPath)
-      ).stdout
-    } catch (error) {
-      const code = (error as { code?: unknown })?.code
-      if (code !== 1 && code !== 5 && code !== '1' && code !== '5') {
-        throw error
-      }
-    }
-    for (const line of iterateProcessOutputLines(branchRemoteConfig)) {
-      const separator = line.search(/\s/)
-      const value = separator < 0 ? '' : line.slice(separator + 1).trim()
-      if (value === remoteName || value === expectedRemoteUrl) {
-        throw new Error(`Refusing to remove remote "${remoteName}" while a branch uses it.`)
-      }
-    }
-    return this.runWithGitReadCacheClear(() => this.git(['remote', 'remove', remoteName], repoPath))
+    return this.runWithGitReadCacheClear(() =>
+      removeRelayRemoteIfMatches(this.git.bind(this), params)
+    )
   }
 
   private async isGitRepo(params: Record<string, unknown>) {
@@ -1572,6 +1535,17 @@ export class GitHandler {
       )
     const worktreePath = params.worktreePath
     return this.watcherRegistry && typeof worktreePath === 'string'
+      ? this.watcherRegistry.runWithRemovalFence(expandTilde(worktreePath), remove)
+      : remove()
+  }
+
+  private async removeWorktreeWithPreservedBranchCleanup(params: Record<string, unknown>) {
+    const remove = () =>
+      this.runWithGitReadCacheClear(() =>
+        removeWorktreeWithCleanupOp(this.git.bind(this), params, this.gitCapabilities)
+      )
+    const worktreePath = params.worktreePath
+    return this.watcherRegistry && typeof worktreePath === 'string' && params.prepare !== true
       ? this.watcherRegistry.runWithRemovalFence(expandTilde(worktreePath), remove)
       : remove()
   }

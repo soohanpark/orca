@@ -1845,10 +1845,18 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         targetBranch,
         isCrossRepository
       }),
-    remove: async ({ worktreeId, hostId, force, allowUnverifiedPtyStop, skipArchive }) => {
+    remove: async ({
+      worktreeId,
+      worktreeInstanceId,
+      hostId,
+      force,
+      allowUnverifiedPtyStop,
+      skipArchive
+    }) => {
       invalidateRuntimeWorktreeCaches()
       return callRuntimeResult<RemoveWorktreeResult>('worktree.rm', {
         worktree: toRuntimeWorktreeSelector(worktreeId),
+        ...(worktreeInstanceId ? { worktreeInstanceId } : {}),
         ...(hostId ? { hostId } : {}),
         force,
         // Why (#11960): the web client renders the same Force Delete affordances, so

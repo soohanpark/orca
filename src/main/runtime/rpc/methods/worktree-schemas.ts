@@ -276,6 +276,7 @@ export const WorktreeSet = WorktreeSelector.extend({
 
 export const WorktreeRemove = WorktreeSelector.extend({
   hostId: OptionalString,
+  worktreeInstanceId: OptionalString,
   force: OptionalBoolean,
   // Why (#11960): the CLI's --force is an unambiguous force affordance, but the
   // desktop sets `force` for an ordinary confirmed delete too, so the PTY-stop

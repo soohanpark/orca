@@ -130,6 +130,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.listWorktrees')
     expect(methods).toContain('git.addWorktree')
     expect(methods).toContain('git.removeWorktree')
+    expect(methods).toContain('git.removeWorktreeWithPreservedBranchCleanup')
     expect(methods).toContain('git.worktreeIsClean')
     expect(methods).toContain('git.refreshLocalBaseRefForWorktreeCreate')
     expect(methods).toContain('git.renameCurrentBranch')
@@ -155,6 +156,91 @@ describe('GitHandler', () => {
       dispatcher.callRequest('git.removeWorktree', { worktreePath: '/repo-feature' })
     ).rejects.toBe(removalError)
     expect(runWithRemovalFence).toHaveBeenCalledWith('/repo-feature', expect.any(Function))
+
+    await expect(
+      dispatcher.callRequest('git.removeWorktreeWithPreservedBranchCleanup', {
+        worktreePath: '/repo-feature',
+        worktreeId: 'repo::/repo-feature',
+        worktreeInstanceId: 'instance-1'
+      })
+    ).rejects.toBe(removalError)
+    expect(runWithRemovalFence).toHaveBeenLastCalledWith('/repo-feature', expect.any(Function))
+  })
+
+  it('writes and attests current instance-bound authority before combined removal', async () => {
+    gitInit(tmpDir)
+    writeFileSync(path.join(tmpDir, 'file.txt'), 'base\n')
+    gitCommit(tmpDir, 'initial')
+    const linkedPath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-feature`)
+    execFileSync('git', ['worktree', 'add', '-b', 'feature/preserved', linkedPath], {
+      cwd: tmpDir,
+      stdio: 'pipe'
+    })
+    writeFileSync(path.join(linkedPath, 'file.txt'), 'feature\n')
+    gitCommit(linkedPath, 'preserved change')
+    const expectedHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: linkedPath,
+      encoding: 'utf-8'
+    }).trim()
+    const args = {
+      worktreePath: linkedPath,
+      worktreeId: `repo-1::${linkedPath}`,
+      worktreeInstanceId: 'instance-current'
+    }
+
+    await expect(
+      dispatcher.callRequest('git.removeWorktreeWithPreservedBranchCleanup', {
+        ...args,
+        prepare: true
+      })
+    ).resolves.toEqual({ preparedBranchName: 'feature/preserved' })
+    await expect(
+      dispatcher.callRequest('git.removeWorktreeWithPreservedBranchCleanup', {
+        ...args,
+        preparedBranchName: 'feature/preserved'
+      })
+    ).resolves.toEqual({
+      preservedBranch: { branchName: 'feature/preserved', head: expectedHead }
+    })
+
+    const stored = execFileSync(
+      'git',
+      ['config', '--local', '--get', 'branch.feature/preserved.orca-preserved-cleanup'],
+      { cwd: tmpDir, encoding: 'utf-8' }
+    ).trim()
+    expect(JSON.parse(stored)).toMatchObject({
+      expectedHead,
+      branchName: 'feature/preserved',
+      worktreeId: args.worktreeId,
+      worktreeInstanceId: 'instance-current'
+    })
+  })
+
+  it('does not remove when the combined authority write fails', async () => {
+    gitInit(tmpDir)
+    writeFileSync(path.join(tmpDir, 'file.txt'), 'base\n')
+    gitCommit(tmpDir, 'initial')
+    const linkedPath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-locked`)
+    execFileSync('git', ['worktree', 'add', '-b', 'feature/locked', linkedPath], {
+      cwd: tmpDir,
+      stdio: 'pipe'
+    })
+    const originalGit = handler['git'].bind(handler)
+    vi.spyOn(handler as unknown as GitSpyTarget, 'git').mockImplementation(async (args, cwd) => {
+      if (args.includes('--replace-all')) {
+        throw new Error('config locked')
+      }
+      return originalGit(args, cwd)
+    })
+
+    await expect(
+      dispatcher.callRequest('git.removeWorktreeWithPreservedBranchCleanup', {
+        worktreePath: linkedPath,
+        worktreeId: `repo-1::${linkedPath}`,
+        worktreeInstanceId: 'instance-current'
+      })
+    ).rejects.toThrow('config locked')
+    expect(currentBranch(linkedPath)).toBe('feature/locked')
   })
 
   describe('abortMerge', () => {
@@ -428,6 +514,48 @@ describe('GitHandler', () => {
       expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe(
         'pr-contributor'
       )
+    })
+
+    it('rolls back the atomic claim when a branch starts using the remote at removal', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'base\n')
+      gitCommit(tmpDir, 'initial')
+      execFileSync(
+        'git',
+        ['remote', 'add', 'pr-contributor', 'git@github.com:contributor/orca.git'],
+        { cwd: tmpDir, stdio: 'pipe' }
+      )
+      execFileSync('git', ['update-ref', 'refs/remotes/pr-contributor/main', 'HEAD'], {
+        cwd: tmpDir,
+        stdio: 'pipe'
+      })
+      const originalGit = handler['git'].bind(handler)
+      vi.spyOn(handler as unknown as GitSpyTarget, 'git').mockImplementation(async (args, cwd) => {
+        if (args.includes('--rename-section') && args.includes('remote.pr-contributor')) {
+          execFileSync('git', ['config', 'branch.raced.remote', 'pr-contributor'], {
+            cwd: tmpDir,
+            stdio: 'pipe'
+          })
+        }
+        return originalGit(args, cwd)
+      })
+
+      await expect(
+        dispatcher.callRequest('git.removeRemoteIfMatches', {
+          repoPath: tmpDir,
+          remoteName: 'pr-contributor',
+          expectedRemoteUrl: 'git@github.com:contributor/orca.git'
+        })
+      ).rejects.toThrow('while a branch uses it')
+      expect(execFileSync('git', ['remote'], { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe(
+        'pr-contributor'
+      )
+      expect(
+        execFileSync('git', ['rev-parse', 'refs/remotes/pr-contributor/main'], {
+          cwd: tmpDir,
+          encoding: 'utf-8'
+        }).trim()
+      ).toMatch(/^[0-9a-f]{40}$/)
     })
   })
 

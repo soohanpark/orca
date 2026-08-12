@@ -145,11 +145,51 @@ describe('preserved branch cleanup provenance', () => {
       'feature/test',
       head,
       undefined,
+      'repo-1::/missing/wt',
+      'instance-a'
+    )
+
+    await expect(
+      recoverPreservedBranchCleanupProvenance(execGit, path, {
+        worktreeId: 'repo-1::/missing/wt',
+        worktreeInstanceId: 'instance-a'
+      })
+    ).resolves.toEqual({ branchName: 'feature/test', expectedHead: head })
+  })
+
+  it('does not attach legacy or reused-path authority to another workspace instance', async () => {
+    const { execGit, path } = await createRepo()
+    const head = (await execGit(['rev-parse', 'feature/test'], path)).stdout.trim()
+    await execGit(['branch', 'feature/other'], path)
+    await rememberPreservedBranchCleanupProvenance(
+      execGit,
+      path,
+      'feature/test',
+      head,
+      undefined,
+      'repo-1::/missing/wt',
+      'instance-old'
+    )
+    await rememberPreservedBranchCleanupProvenance(
+      execGit,
+      path,
+      'feature/other',
+      head,
+      undefined,
       'repo-1::/missing/wt'
     )
 
     await expect(
-      recoverPreservedBranchCleanupProvenance(execGit, path, 'repo-1::/missing/wt')
+      recoverPreservedBranchCleanupProvenance(execGit, path, {
+        worktreeId: 'repo-1::/missing/wt',
+        worktreeInstanceId: 'instance-new'
+      })
+    ).resolves.toBeNull()
+    await expect(
+      recoverPreservedBranchCleanupProvenance(execGit, path, {
+        worktreeId: 'repo-1::/missing/wt',
+        worktreeInstanceId: 'instance-old'
+      })
     ).resolves.toEqual({ branchName: 'feature/test', expectedHead: head })
   })
 

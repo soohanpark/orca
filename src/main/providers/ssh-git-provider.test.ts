@@ -1694,6 +1694,53 @@ describe('SshGitProvider', () => {
     })
   })
 
+  it('prepares and removes with instance-bound authority through the combined lifecycle RPC', async () => {
+    const options = {
+      worktreePath: '/home/user/fix-auth',
+      worktreeId: 'repo-1::/home/user/fix-auth',
+      worktreeInstanceId: 'instance-1',
+      force: true,
+      pushTarget: {
+        remoteName: 'contributor',
+        branchName: 'user/fix',
+        remoteUrl: 'https://github.com/user/repo.git',
+        remoteCreated: true
+      }
+    }
+    mux.request.mockResolvedValueOnce({ preparedBranchName: 'you/fix-auth' })
+
+    await expect(provider.preparePreservedBranchWorktreeRemoval(options)).resolves.toEqual({
+      preparedBranchName: 'you/fix-auth'
+    })
+    await provider.removeWorktreeWithPreservedBranchCleanup({
+      ...options,
+      preparedBranchName: 'you/fix-auth'
+    })
+
+    expect(mux.request).toHaveBeenNthCalledWith(1, 'git.removeWorktreeWithPreservedBranchCleanup', {
+      ...options,
+      prepare: true
+    })
+    expect(mux.request).toHaveBeenNthCalledWith(2, 'git.removeWorktreeWithPreservedBranchCleanup', {
+      ...options,
+      preparedBranchName: 'you/fix-auth'
+    })
+  })
+
+  it('fails old relays before combined preserved-branch removal', async () => {
+    mux.request.mockRejectedValueOnce(
+      Object.assign(new Error('Method not found'), { code: -32601 })
+    )
+
+    await expect(
+      provider.preparePreservedBranchWorktreeRemoval({
+        worktreePath: '/home/user/fix-auth',
+        worktreeId: 'repo-1::/home/user/fix-auth',
+        worktreeInstanceId: 'instance-1'
+      })
+    ).rejects.toThrow('Reconnect to deploy the latest relay')
+  })
+
   it('rememberPreservedBranchCleanupProvenance sends exact authority to the narrow RPC', async () => {
     const pushTarget = {
       remoteName: 'contributor',

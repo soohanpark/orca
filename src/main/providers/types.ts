@@ -27,4 +27,8 @@ export type {
 
 // ─── Git Provider ───────────────────────────────────────────────────
 
-export type { GitProviderStatusOptions, IGitProvider } from './git-provider-contract'
+export type {
+  GitProviderStatusOptions,
+  IGitProvider,
+  PreservedBranchWorktreeRemovalOptions
+} from './git-provider-contract'

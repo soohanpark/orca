@@ -1291,6 +1291,7 @@ function makeRpcRequest(method: string, params?: unknown): RpcRequest {
 
 function makeWorktreeMeta(overrides: Partial<WorktreeMeta> = {}): WorktreeMeta {
   return {
+    instanceId: 'instance-current',
     displayName: '',
     comment: '',
     linkedIssue: null,
@@ -1309,6 +1310,21 @@ function makeWorktreeMeta(overrides: Partial<WorktreeMeta> = {}): WorktreeMeta {
 
 function preservedCleanupProviderMethods() {
   return {
+    preparePreservedBranchWorktreeRemoval: vi.fn().mockResolvedValue({}),
+    removeWorktreeWithPreservedBranchCleanup: vi.fn(async function (
+      this: {
+        removeWorktree: (
+          worktreePath: string,
+          force?: boolean,
+          options?: { deleteBranch?: boolean }
+        ) => Promise<unknown>
+      },
+      options: { worktreePath: string; force?: boolean; deleteBranch?: boolean }
+    ) {
+      return options.deleteBranch === false
+        ? this.removeWorktree(options.worktreePath, options.force, { deleteBranch: false })
+        : this.removeWorktree(options.worktreePath, options.force)
+    }),
     rememberPreservedBranchCleanupProvenance: vi.fn(
       async (repoPath: string, branchName: string, expectedHead: string, pushTarget: unknown) =>
         rememberPreservedBranchCleanupProvenanceMock(
@@ -1394,6 +1410,7 @@ const store = {
     }) as never,
   getAllWorktreeMeta: () => ({
     [TEST_WORKTREE_ID]: {
+      instanceId: 'instance-current',
       displayName: 'foo',
       comment: '',
       linkedIssue: 123,
@@ -5310,7 +5327,10 @@ describe('OrcaRuntimeService', () => {
       getAllWorktreeMeta: () => metaById,
       getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
       setWorktreeMeta: (worktreeId: string, meta: Partial<WorktreeMeta>) => {
-        metaById[worktreeId] = { ...(metaById[worktreeId] ?? makeWorktreeMeta()), ...meta }
+        metaById[worktreeId] = {
+          ...(metaById[worktreeId] ?? makeWorktreeMeta()),
+          ...meta
+        }
         return metaById[worktreeId]
       }
     }
@@ -6067,8 +6087,12 @@ describe('OrcaRuntimeService', () => {
 
   it('removes SSH-backed runtime worktrees through the SSH git provider', async () => {
     vi.mocked(listWorktrees).mockClear()
+    const remoteWorktreeId = `${TEST_REPO_ID}::/remote/feature`
     const remoteStore = {
       ...store,
+      getAllWorktreeMeta: () => ({ [remoteWorktreeId]: makeWorktreeMeta() }),
+      getWorktreeMeta: (worktreeId: string) =>
+        worktreeId === remoteWorktreeId ? makeWorktreeMeta() : undefined,
       getRepos: () => [
         {
           id: TEST_REPO_ID,
@@ -6115,7 +6139,7 @@ describe('OrcaRuntimeService', () => {
           id: 'pty-remote',
           cwd: '/remote/feature',
           title: 'shell',
-          worktreeId: `${TEST_REPO_ID}::/remote/feature`
+          worktreeId: remoteWorktreeId
         }
       ]),
       shutdown: vi.fn().mockResolvedValue(undefined)
@@ -6144,7 +6168,7 @@ describe('OrcaRuntimeService', () => {
     )
     expect(removeWorktree).not.toHaveBeenCalled()
     expect(listWorktrees).not.toHaveBeenCalled()
-    expect(deleteWorktreeHistoryDirMock).toHaveBeenCalledWith(`${TEST_REPO_ID}::/remote/feature`)
+    expect(deleteWorktreeHistoryDirMock).toHaveBeenCalledWith(remoteWorktreeId)
   })
 
   // Regression: `repoId::path` ids repeat across hosts, so the SSH delete's runtime sweep used to
@@ -6158,7 +6182,15 @@ describe('OrcaRuntimeService', () => {
       addedAt: 1,
       connectionId: 'ssh-1'
     }
-    const remoteStore = { ...store, getRepos: () => [remoteRepo], getRepo: () => remoteRepo }
+    const remoteWorktreeId = `${TEST_REPO_ID}::/remote/feature`
+    const remoteStore = {
+      ...store,
+      getRepos: () => [remoteRepo],
+      getRepo: () => remoteRepo,
+      getAllWorktreeMeta: () => ({ [remoteWorktreeId]: makeWorktreeMeta() }),
+      getWorktreeMeta: (worktreeId: string) =>
+        worktreeId === remoteWorktreeId ? makeWorktreeMeta() : undefined
+    }
     const gitProvider = {
       ...preservedCleanupProviderMethods(),
       listWorktrees: vi.fn().mockResolvedValue([
@@ -6195,8 +6227,8 @@ describe('OrcaRuntimeService', () => {
       getForegroundProcess: async () => null
     })
     syncSinglePty(runtime, null)
-    runtime.registerPty('pty-remote', `${TEST_REPO_ID}::/remote/feature`, 'ssh-1')
-    runtime.registerPty('pty-local-same-id', `${TEST_REPO_ID}::/remote/feature`, null)
+    runtime.registerPty('pty-remote', remoteWorktreeId, 'ssh-1')
+    runtime.registerPty('pty-local-same-id', remoteWorktreeId, null)
 
     try {
       await runtime.removeManagedWorktree('path:/remote/feature', true, false)
@@ -35144,6 +35176,7 @@ describe('OrcaRuntimeService', () => {
         {
           workspaceKind: 'git',
           worktreeId: 'repo-1::/tmp/worktree-a',
+          worktreeInstanceId: 'instance-current',
           repoId: 'repo-1',
           hostId: 'local',
           terminalPlatform: process.platform,
@@ -38924,7 +38957,10 @@ describe('OrcaRuntimeService', () => {
       getAllWorktreeMeta: () => metaById,
       getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
       setWorktreeMeta: (worktreeId: string, meta: Partial<WorktreeMeta>) => {
-        metaById[worktreeId] = { ...(metaById[worktreeId] ?? makeWorktreeMeta()), ...meta }
+        metaById[worktreeId] = {
+          ...(metaById[worktreeId] ?? makeWorktreeMeta({ instanceId: undefined })),
+          ...meta
+        }
         return metaById[worktreeId]
       },
       getWorktreeLineage: () => undefined,
@@ -38981,7 +39017,10 @@ describe('OrcaRuntimeService', () => {
       getAllWorktreeMeta: () => metaById,
       getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
       setWorktreeMeta: (worktreeId: string, meta: Partial<WorktreeMeta>) => {
-        metaById[worktreeId] = { ...(metaById[worktreeId] ?? makeWorktreeMeta()), ...meta }
+        metaById[worktreeId] = {
+          ...(metaById[worktreeId] ?? makeWorktreeMeta({ instanceId: undefined })),
+          ...meta
+        }
         return metaById[worktreeId]
       },
       getWorktreeLineage: () => undefined,
@@ -39295,7 +39334,7 @@ describe('OrcaRuntimeService', () => {
     const parentId = `${TEST_REPO_ID}::${parentPath}`
     const childId = `${TEST_REPO_ID}::${childPath}`
     const metaById: Record<string, WorktreeMeta> = {
-      [parentId]: makeWorktreeMeta(),
+      [parentId]: makeWorktreeMeta({ instanceId: undefined }),
       [childId]: makeWorktreeMeta({ instanceId: 'child-instance' })
     }
     const runtimeStore = {
@@ -46514,6 +46553,7 @@ describe('OrcaRuntimeService', () => {
     vi.mocked(listWorktreesStrict)
       .mockResolvedValueOnce(MOCK_GIT_WORKTREES)
       .mockResolvedValueOnce(MOCK_GIT_WORKTREES)
+      .mockResolvedValueOnce(MOCK_GIT_WORKTREES)
       .mockResolvedValue([])
 
     try {
@@ -46851,6 +46891,28 @@ describe('OrcaRuntimeService', () => {
     )
   })
 
+  it('rejects a stale removal host instead of forgetting another host workspace', async () => {
+    deleteWorktreeHistoryDirMock.mockClear()
+    vi.mocked(removeWorktree).mockClear()
+    const removeWorktreeMeta = vi.fn()
+    const runtime = createWorktreeRemovalRuntime({ ...store, removeWorktreeMeta })
+
+    await expect(
+      runtime.removeManagedWorktree(
+        TEST_WORKTREE_ID,
+        false,
+        false,
+        false,
+        'ssh:stale-host',
+        'instance-current'
+      )
+    ).rejects.toThrow('selector_not_found')
+
+    expect(removeWorktreeMeta).not.toHaveBeenCalled()
+    expect(deleteWorktreeHistoryDirMock).not.toHaveBeenCalled()
+    expect(removeWorktree).not.toHaveBeenCalled()
+  })
+
   it('reclaims completed runtime reviews while retaining pending force-delete authority', async () => {
     const runtime = createWorktreeRemovalRuntime()
     const cleanups = Array.from({ length: 8 }, (_, index) => ({
@@ -46924,6 +46986,18 @@ describe('OrcaRuntimeService', () => {
     }
     const provider = {
       ...preservedCleanupProviderMethods(),
+      preparePreservedBranchWorktreeRemoval: vi.fn(async () => {
+        await rememberPreservedBranchCleanupProvenanceMock(
+          undefined,
+          remoteRepo.path,
+          'feature/test',
+          'def456',
+          undefined,
+          remoteWorktreeId,
+          'instance-current'
+        )
+        return { preparedBranchName: 'feature/test' }
+      }),
       exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
       forceDeletePreservedBranch: vi.fn().mockResolvedValue(undefined),
       listWorktrees: vi.fn().mockResolvedValue([
@@ -46963,7 +47037,7 @@ describe('OrcaRuntimeService', () => {
     }
   })
 
-  it('recovers a runtime preserved review after a lost SSH removal response', async () => {
+  it('recovers a runtime preserved review after the outer acknowledgement is lost', async () => {
     const remoteRepo = {
       ...store.getRepo(TEST_REPO_ID)!,
       path: '/remote/repo',
@@ -46990,11 +47064,10 @@ describe('OrcaRuntimeService', () => {
         delete metaById[worktreeId]
       }
     }
-    const removeWorktree = vi.fn()
     let removalCompleted = false
-    removeWorktree.mockImplementationOnce(async () => {
+    const removeWorktree = vi.fn(async () => {
       removalCompleted = true
-      throw new Error('response lost')
+      return { preservedBranch: { branchName: 'feature/test', head: 'def456' } }
     })
     const mainWorktree = {
       path: remoteRepo.path,
@@ -47010,7 +47083,7 @@ describe('OrcaRuntimeService', () => {
       ),
       removeWorktree,
       exec: vi.fn().mockResolvedValue({
-        stdout: `branch.feature/test.orca-preserved-cleanup {"version":1,"expectedHead":"def456","branchName":"feature/test","worktreeId":"${remoteWorktreeId}"}\n`,
+        stdout: `branch.feature/test.orca-preserved-cleanup {"version":1,"expectedHead":"def456","branchName":"feature/test","worktreeId":"${remoteWorktreeId}","worktreeInstanceId":"instance-current"}\n`,
         stderr: ''
       })
     }
@@ -47022,8 +47095,30 @@ describe('OrcaRuntimeService', () => {
     const runtime = createWorktreeRemovalRuntime(runtimeStore)
 
     try {
-      await expect(runtime.removeManagedWorktree(remoteWorktreeId)).rejects.toThrow('response lost')
-      await expect(runtime.removeManagedWorktree(remoteWorktreeId)).resolves.toEqual({
+      await expect(
+        (async () => {
+          await runtime.removeManagedWorktree(
+            remoteWorktreeId,
+            false,
+            false,
+            false,
+            undefined,
+            'instance-current'
+          )
+          throw new Error('response lost after host completion')
+        })()
+      ).rejects.toThrow('response lost after host completion')
+      expect(metaById[remoteWorktreeId]).toBeUndefined()
+      await expect(
+        runtime.removeManagedWorktree(
+          remoteWorktreeId,
+          false,
+          false,
+          false,
+          undefined,
+          'instance-current'
+        )
+      ).resolves.toEqual({
         preservedBranch: { branchName: 'feature/test', head: 'def456' }
       })
       expect(removeWorktree).toHaveBeenCalledOnce()

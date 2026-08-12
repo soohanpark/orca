@@ -281,8 +281,12 @@ export const WORKTREE_METHODS: RpcMethod[] = [
         params.allowUnverifiedPtyStop === true
       ] as const
       const result = params.hostId
-        ? await runtime.removeManagedWorktree(...removalArgs, params.hostId)
-        : await runtime.removeManagedWorktree(...removalArgs)
+        ? await runtime.removeManagedWorktree(
+            ...removalArgs,
+            params.hostId,
+            params.worktreeInstanceId
+          )
+        : await runtime.removeManagedWorktree(...removalArgs, undefined, params.worktreeInstanceId)
       return { removed: true, ...result }
     }
   }),

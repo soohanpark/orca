@@ -1394,6 +1394,7 @@ export type PreloadApi = {
     >
     remove: (args: {
       worktreeId: string
+      worktreeInstanceId?: string
       hostId?: ExecutionHostId
       force?: boolean
       // Why (#11960): distinct from `force`, which the plain Delete confirmation

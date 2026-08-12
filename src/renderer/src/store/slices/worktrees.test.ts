@@ -6515,6 +6515,70 @@ describe('worktree remote runtime mutations', () => {
     expect(mockApi.worktrees.remove).not.toHaveBeenCalled()
   })
 
+  it('retries an ambiguous paired removal with the exact instance before forgetting locally', async () => {
+    const store = createTestStore()
+    const wt = makeWorktree({
+      id: 'repo-runtime::/path/preserved',
+      repoId: 'repo-runtime',
+      path: '/path/preserved',
+      hostId: 'runtime:env-1',
+      instanceId: 'instance-preserved'
+    })
+    let removalAttempts = 0
+    runtimeEnvironmentCall.mockImplementation(({ method }: RuntimeEnvironmentCallRequest) => {
+      if (method === 'repo.hooksCheck') {
+        return Promise.resolve({
+          id: 'rpc-hooks',
+          ok: true,
+          result: { hasHooks: false, hooks: null, mayNeedUpdate: false },
+          _meta: { runtimeId: 'runtime-remote' }
+        })
+      }
+      removalAttempts += 1
+      if (removalAttempts === 1) {
+        return Promise.reject(new Error('response lost after host completion'))
+      }
+      return Promise.resolve({
+        id: 'rpc-rm-retry',
+        ok: true,
+        result: {
+          removed: true,
+          preservedBranch: { branchName: 'feature/preserved', head: 'head-preserved' }
+        },
+        _meta: { runtimeId: 'runtime-remote' }
+      })
+    })
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'env-1' } as never,
+      worktreesByRepo: { 'repo-runtime': [wt] }
+    } as Partial<AppState>)
+
+    await expect(store.getState().removeWorktree(wt.id)).resolves.toEqual({
+      ok: true,
+      preservedBranch: {
+        branchName: 'feature/preserved',
+        head: 'head-preserved',
+        hostId: 'runtime:env-1',
+        runtimeEnvironmentId: 'env-1'
+      }
+    })
+    const removalCalls = runtimeEnvironmentCall.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.method === 'worktree.rm')
+    expect(removalCalls).toHaveLength(2)
+    expect(removalCalls.map((call) => call.params)).toEqual([
+      expect.objectContaining({
+        worktree: `id:${wt.id}`,
+        worktreeInstanceId: 'instance-preserved'
+      }),
+      expect.objectContaining({
+        worktree: `id:${wt.id}`,
+        worktreeInstanceId: 'instance-preserved'
+      })
+    ])
+    expect(mockApi.worktrees.forgetLocal).not.toHaveBeenCalled()
+  })
+
   it.each(['repo_not_found', 'selector_not_found'])(
     'forgets a mirrored row when the remote returns %s',
     async (errorCode) => {

@@ -18,6 +18,17 @@ import type { GitProviderStatusOptions } from './git-provider-status-options'
 
 export type { GitProviderStatusOptions } from './git-provider-status-options'
 
+export type PreservedBranchWorktreeRemovalOptions = {
+  worktreePath: string
+  worktreeId: string
+  worktreeInstanceId: string
+  force?: boolean
+  deleteBranch?: boolean
+  forceBranchDelete?: boolean
+  pushTarget?: GitPushTarget
+  preparedBranchName?: string
+}
+
 export type IGitProvider = {
   getStatus(worktreePath: string, options?: GitProviderStatusOptions): Promise<GitStatusResult>
   getSubmoduleStatus(
@@ -83,6 +94,12 @@ export type IGitProvider = {
     worktreePath: string,
     force?: boolean,
     options?: { deleteBranch?: boolean; forceBranchDelete?: boolean }
+  ): Promise<RemoveWorktreeResult>
+  preparePreservedBranchWorktreeRemoval?(
+    options: PreservedBranchWorktreeRemovalOptions
+  ): Promise<{ preparedBranchName?: string }>
+  removeWorktreeWithPreservedBranchCleanup?(
+    options: PreservedBranchWorktreeRemovalOptions
   ): Promise<RemoveWorktreeResult>
   renameCurrentBranch?(worktreePath: string, newBranch: string): Promise<void>
   forceDeletePreservedBranch?(

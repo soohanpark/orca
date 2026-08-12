@@ -18,7 +18,8 @@ export async function rememberPreservedBranchCleanupProvenance(
   branchName: string,
   expectedHead: string,
   pushTarget?: GitPushTarget,
-  worktreeId?: string
+  worktreeId?: string,
+  worktreeInstanceId?: string
 ): Promise<void> {
   await execGit(
     [
@@ -29,7 +30,7 @@ export async function rememberPreservedBranchCleanupProvenance(
       serializePreservedBranchCleanupProvenance(
         expectedHead,
         pushTarget,
-        worktreeId ? { branchName, worktreeId } : undefined
+        worktreeId ? { branchName, worktreeId, worktreeInstanceId } : undefined
       )
     ],
     repoPath
@@ -39,7 +40,7 @@ export async function rememberPreservedBranchCleanupProvenance(
 export async function recoverPreservedBranchCleanupProvenance(
   execGit: PreservedBranchCleanupGitExec,
   repoPath: string,
-  worktreeId: string
+  identity: { worktreeId: string; worktreeInstanceId: string }
 ): Promise<{
   branchName: string
   expectedHead: string
@@ -71,11 +72,14 @@ export async function recoverPreservedBranchCleanupProvenance(
     } catch {
       continue
     }
-    if (candidate.worktreeId !== worktreeId) {
+    if (
+      candidate.worktreeId !== identity.worktreeId ||
+      candidate.worktreeInstanceId !== identity.worktreeInstanceId
+    ) {
       continue
     }
     if (recovered) {
-      throw new Error(`Ambiguous preserved branch cleanup is pending for "${worktreeId}".`)
+      throw new Error(`Ambiguous preserved branch cleanup is pending for "${identity.worktreeId}".`)
     }
     recovered = candidate
   }

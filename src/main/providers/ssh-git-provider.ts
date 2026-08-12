@@ -3,7 +3,11 @@
    indirection — every method is a 1:1 forwarder to a relay RPC plus a
    small amount of param plumbing. */
 import type { SshChannelMultiplexer } from '../ssh/ssh-channel-multiplexer'
-import type { GitProviderStatusOptions, IGitProvider } from './types'
+import type {
+  GitProviderStatusOptions,
+  IGitProvider,
+  PreservedBranchWorktreeRemovalOptions
+} from './types'
 import type {
   GitStatusResult,
   GitDiffResult,
@@ -750,6 +754,39 @@ export class SshGitProvider implements IGitProvider {
           ...options
         })) ?? {}) as RemoveWorktreeResult
     )
+  }
+
+  async preparePreservedBranchWorktreeRemoval(
+    options: PreservedBranchWorktreeRemovalOptions
+  ): Promise<{ preparedBranchName?: string }> {
+    return this.requestPreservedBranchWorktreeRemoval({
+      ...options,
+      prepare: true
+    }) as Promise<{ preparedBranchName?: string }>
+  }
+
+  async removeWorktreeWithPreservedBranchCleanup(
+    options: PreservedBranchWorktreeRemovalOptions
+  ): Promise<RemoveWorktreeResult> {
+    return this.requestPreservedBranchWorktreeRemoval(options) as Promise<RemoveWorktreeResult>
+  }
+
+  private async requestPreservedBranchWorktreeRemoval(
+    options: PreservedBranchWorktreeRemovalOptions & { prepare?: boolean }
+  ): Promise<RemoveWorktreeResult | { preparedBranchName?: string }> {
+    try {
+      return await this.runWithDiffDedupeClear(
+        async () =>
+          (await this.mux.request('git.removeWorktreeWithPreservedBranchCleanup', options)) ?? {}
+      )
+    } catch (error) {
+      if (isJsonRpcMethodNotFoundError(error)) {
+        throw new Error(
+          'This SSH host is running an older Orca relay that cannot safely remove preserved branches. Reconnect to deploy the latest relay, then try again.'
+        )
+      }
+      throw error
+    }
   }
 
   async worktreeIsClean(

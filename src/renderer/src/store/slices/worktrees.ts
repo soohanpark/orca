@@ -929,6 +929,27 @@ function isRuntimeRepoNotFoundError(error: unknown): boolean {
   return hasRuntimeRpcErrorCode(error, 'repo_not_found')
 }
 
+async function removeRuntimeWorktreeWithReceiptRetry(
+  target: Parameters<typeof callRuntimeRpc>[0],
+  params: Record<string, unknown>,
+  assertCurrent: () => void
+): Promise<RemoveWorktreeResult> {
+  const remove = (): Promise<RemoveWorktreeResult> => {
+    assertCurrent()
+    return callRuntimeRpc<RemoveWorktreeResult>(target, 'worktree.rm', params, {
+      timeoutMs: 60_000
+    })
+  }
+  try {
+    return await remove()
+  } catch (error) {
+    if (error instanceof RuntimeRpcCallError) {
+      throw error
+    }
+    return remove()
+  }
+}
+
 function replaceWorktreeInRepoLists(
   worktreesByRepo: Record<string, Worktree[]>,
   updatedWorktree: Worktree
@@ -4239,23 +4260,28 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             ? (removalGenerationGuard?.assertCurrent(),
               window.api.worktrees.remove({
                 worktreeId,
+                ...(worktreeBeforeRemoval?.instanceId
+                  ? { worktreeInstanceId: worktreeBeforeRemoval.instanceId }
+                  : {}),
                 hostId,
                 force,
                 allowUnverifiedPtyStop: options?.allowUnverifiedPtyStop === true,
                 skipArchive
               }))
             : (removalGenerationGuard?.assertCurrent(),
-              callRuntimeRpc<RemoveWorktreeResult>(
+              removeRuntimeWorktreeWithReceiptRetry(
                 target,
-                'worktree.rm',
                 {
                   worktree: toRuntimeWorktreeSelector(worktreeId),
+                  ...(worktreeBeforeRemoval?.instanceId
+                    ? { worktreeInstanceId: worktreeBeforeRemoval.instanceId }
+                    : {}),
                   ...(hostId ? { hostId } : {}),
                   force,
                   allowUnverifiedPtyStop: options?.allowUnverifiedPtyStop === true,
                   runHooks: !skipArchive
                 },
-                { timeoutMs: 60_000 }
+                () => removalGenerationGuard?.assertCurrent()
               )))
       } catch (error) {
         if (

@@ -6,6 +6,7 @@ export type PreservedBranchCleanupProvenance = {
   pushTarget?: GitPushTarget
   branchName?: string
   worktreeId?: string
+  worktreeInstanceId?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,9 +49,15 @@ export function preservedBranchCleanupConfigKey(branchName: string): string {
 export function serializePreservedBranchCleanupProvenance(
   expectedHead: string,
   pushTarget?: GitPushTarget,
-  identity?: { branchName: string; worktreeId: string }
+  identity?: { branchName: string; worktreeId: string; worktreeInstanceId?: string }
 ): string {
-  if (!expectedHead || (identity !== undefined && (!identity.branchName || !identity.worktreeId))) {
+  if (
+    !expectedHead ||
+    (identity !== undefined &&
+      (!identity.branchName ||
+        !identity.worktreeId ||
+        (identity.worktreeInstanceId !== undefined && !identity.worktreeInstanceId)))
+  ) {
     throw new Error('Invalid preserved branch cleanup provenance.')
   }
   return JSON.stringify({
@@ -72,13 +79,23 @@ export function decodePreservedBranchCleanupProvenance(
   }
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ['version', 'expectedHead', 'pushTarget', 'branchName', 'worktreeId']) ||
+    !hasOnlyKeys(value, [
+      'version',
+      'expectedHead',
+      'pushTarget',
+      'branchName',
+      'worktreeId',
+      'worktreeInstanceId'
+    ]) ||
     value.version !== 1 ||
     typeof value.expectedHead !== 'string' ||
     !value.expectedHead ||
     (value.branchName !== undefined &&
       (typeof value.branchName !== 'string' || !value.branchName)) ||
-    (value.worktreeId !== undefined && (typeof value.worktreeId !== 'string' || !value.worktreeId))
+    (value.worktreeId !== undefined &&
+      (typeof value.worktreeId !== 'string' || !value.worktreeId)) ||
+    (value.worktreeInstanceId !== undefined &&
+      (typeof value.worktreeInstanceId !== 'string' || !value.worktreeInstanceId))
   ) {
     throw new Error('Invalid preserved branch cleanup provenance.')
   }
@@ -87,7 +104,10 @@ export function decodePreservedBranchCleanupProvenance(
     expectedHead: value.expectedHead,
     ...(value.pushTarget !== undefined ? { pushTarget: parsePushTarget(value.pushTarget) } : {}),
     ...(value.branchName !== undefined ? { branchName: value.branchName } : {}),
-    ...(value.worktreeId !== undefined ? { worktreeId: value.worktreeId } : {})
+    ...(value.worktreeId !== undefined ? { worktreeId: value.worktreeId } : {}),
+    ...(value.worktreeInstanceId !== undefined
+      ? { worktreeInstanceId: value.worktreeInstanceId }
+      : {})
   }
 }
 
