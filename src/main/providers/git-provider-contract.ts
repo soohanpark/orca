@@ -18,6 +18,17 @@ import type { GitProviderStatusOptions } from './git-provider-status-options'
 
 export type { GitProviderStatusOptions } from './git-provider-status-options'
 
+export type PreservedBranchWorktreeRemovalOptions = {
+  worktreePath: string
+  worktreeId: string
+  worktreeInstanceId: string
+  force?: boolean
+  deleteBranch?: boolean
+  forceBranchDelete?: boolean
+  pushTarget?: GitPushTarget
+  preparedBranchName?: string
+}
+
 export type IGitProvider = {
   getStatus(worktreePath: string, options?: GitProviderStatusOptions): Promise<GitStatusResult>
   getSubmoduleStatus(
@@ -84,12 +95,27 @@ export type IGitProvider = {
     force?: boolean,
     options?: { deleteBranch?: boolean; forceBranchDelete?: boolean }
   ): Promise<RemoveWorktreeResult>
+  preparePreservedBranchWorktreeRemoval?(
+    options: PreservedBranchWorktreeRemovalOptions
+  ): Promise<{ preparedBranchName?: string }>
+  removeWorktreeWithPreservedBranchCleanup?(
+    options: PreservedBranchWorktreeRemovalOptions
+  ): Promise<RemoveWorktreeResult>
   renameCurrentBranch?(worktreePath: string, newBranch: string): Promise<void>
   forceDeletePreservedBranch?(
     repoPath: string,
     branchName: string,
     expectedHead: string
   ): Promise<void>
+  rememberPreservedBranchCleanupProvenance?(
+    repoPath: string,
+    branchName: string,
+    expectedHead: string,
+    pushTarget?: GitPushTarget,
+    worktreeId?: string
+  ): Promise<void>
+  preflightPreservedBranchCleanupProvenance?(repoPath: string, branchName: string): Promise<void>
+  clearPreservedBranchCleanupProvenance?(repoPath: string, branchName: string): Promise<void>
   isGitRepo(path: string): boolean
   isGitRepoAsync(dirPath: string): Promise<{ isRepo: boolean; rootPath: string | null }>
   exec(

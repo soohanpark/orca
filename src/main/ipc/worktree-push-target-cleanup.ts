@@ -13,6 +13,7 @@ export type GitRemoteExec = (
   args: string[],
   cwd: string
 ) => Promise<{ stdout: string; stderr?: string }>
+export type GitRemoteRemove = (remoteName: string, expectedRemoteUrl: string) => Promise<void>
 export type WorktreePushTargetStore = Pick<Store, 'getAllWorktreeMeta'>
 
 export function sameGitHubRemoteUrl(left: string, right: string): boolean {
@@ -110,7 +111,8 @@ export async function cleanupUnusedWorktreePushTargetRemoteWithExec(
   removedWorktreeId: string,
   target: GitPushTarget | undefined,
   store: WorktreePushTargetStore,
-  execGit: GitRemoteExec
+  execGit: GitRemoteExec,
+  removeRemote?: GitRemoteRemove
 ): Promise<void> {
   if (
     !target?.remoteCreated ||
@@ -139,5 +141,9 @@ export async function cleanupUnusedWorktreePushTargetRemoteWithExec(
     return
   }
 
+  if (removeRemote) {
+    await removeRemote(target.remoteName, configuredRemoteUrl)
+    return
+  }
   await execGit(['remote', 'remove', target.remoteName], repoPath)
 }

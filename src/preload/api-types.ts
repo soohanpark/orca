@@ -110,7 +110,6 @@ import type { TerminalPaneSplitSource } from '../shared/feature-education-teleme
 import type { TaskSourceContext } from '../shared/task-source-context'
 import type { LinearIssueAttributeFilter } from '../shared/linear-issue-attribute-filter'
 import type { ProjectExecutionRuntimeResolution } from '../shared/project-execution-runtime'
-import type { PreservedBranchCleanup } from '../shared/preserved-branch-cleanup'
 import type { StartupCommandDelivery } from '../shared/codex-startup-delivery'
 import type {
   AgentProviderSessionMetadata,
@@ -1395,6 +1394,7 @@ export type PreloadApi = {
     >
     remove: (args: {
       worktreeId: string
+      worktreeInstanceId?: string
       hostId?: ExecutionHostId
       force?: boolean
       // Why (#11960): distinct from `force`, which the plain Delete confirmation
@@ -1414,9 +1414,6 @@ export type PreloadApi = {
       expectedHead: string
       hostId?: ExecutionHostId
     }) => Promise<ForceDeleteWorktreeBranchResult>
-    releasePreservedBranchCleanups: (args: {
-      cleanups: readonly PreservedBranchCleanup[]
-    }) => Promise<{ released: number }>
     updateMeta: (args: { worktreeId: string; updates: Partial<WorktreeMeta> }) => Promise<Worktree>
     listLineage: () => Promise<{
       lineage: Record<string, WorktreeLineage>

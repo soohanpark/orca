@@ -99,8 +99,8 @@ describe('workspace cleanup removal and protection', () => {
       preservedBranch: {
         branchName: 'feature/cleanup',
         head: 'saved-head',
-        hostId: 'ssh:cleanup-target',
-        runtimeEnvironmentId: 'cleanup-hub'
+        hostId: 'ssh:nested-target',
+        runtimeEnvironmentId: 'owner-runtime'
       }
     })
     const store = createCleanupTestStore(removeWorktree)
@@ -118,8 +118,8 @@ describe('workspace cleanup removal and protection', () => {
           worktreeId: candidate.worktreeId,
           branchName: 'feature/cleanup',
           expectedHead: 'saved-head',
-          hostId: 'ssh:cleanup-target',
-          runtimeEnvironmentId: 'cleanup-hub'
+          hostId: 'ssh:nested-target',
+          runtimeEnvironmentId: 'owner-runtime'
         }
       ]
     })

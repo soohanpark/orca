@@ -276,6 +276,7 @@ export const WorktreeSet = WorktreeSelector.extend({
 
 export const WorktreeRemove = WorktreeSelector.extend({
   hostId: OptionalString,
+  worktreeInstanceId: OptionalString,
   force: OptionalBoolean,
   // Why (#11960): the CLI's --force is an unambiguous force affordance, but the
   // desktop sets `force` for an ordinary confirmed delete too, so the PTY-stop
@@ -294,19 +295,6 @@ export const WorktreeForceDeleteBranch = WorktreeSelector.extend({
     .unknown()
     .transform((v) => (typeof v === 'string' ? v : ''))
     .pipe(z.string().min(1, 'Missing expected branch head'))
-})
-
-export const WorktreeReleasePreservedBranchCleanups = z.object({
-  cleanups: z
-    .array(
-      WorktreeForceDeleteBranch.pick({
-        worktree: true,
-        hostId: true,
-        branchName: true,
-        expectedHead: true
-      })
-    )
-    .max(10_000)
 })
 
 export const WorktreeResolvePrBase = z.object({

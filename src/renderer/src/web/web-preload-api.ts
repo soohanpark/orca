@@ -1845,10 +1845,18 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         targetBranch,
         isCrossRepository
       }),
-    remove: async ({ worktreeId, hostId, force, allowUnverifiedPtyStop, skipArchive }) => {
+    remove: async ({
+      worktreeId,
+      worktreeInstanceId,
+      hostId,
+      force,
+      allowUnverifiedPtyStop,
+      skipArchive
+    }) => {
       invalidateRuntimeWorktreeCaches()
       return callRuntimeResult<RemoveWorktreeResult>('worktree.rm', {
         worktree: toRuntimeWorktreeSelector(worktreeId),
+        ...(worktreeInstanceId ? { worktreeInstanceId } : {}),
         ...(hostId ? { hostId } : {}),
         force,
         // Why (#11960): the web client renders the same Force Delete affordances, so
@@ -1867,21 +1875,6 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         branchName,
         expectedHead,
         ...(hostId ? { hostId } : {})
-      }),
-    releasePreservedBranchCleanups: ({ cleanups }) =>
-      callRuntimeResult<{ released: number }>('worktree.releasePreservedBranchCleanups', {
-        cleanups: cleanups.flatMap((cleanup) =>
-          cleanup.expectedHead
-            ? [
-                {
-                  worktree: toRuntimeWorktreeSelector(cleanup.worktreeId),
-                  branchName: cleanup.branchName,
-                  expectedHead: cleanup.expectedHead,
-                  ...(cleanup.hostId ? { hostId: cleanup.hostId } : {})
-                }
-              ]
-            : []
-        )
       }),
     updateMeta: async ({ worktreeId, updates }) => {
       const rpcUpdates =

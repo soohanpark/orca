@@ -25,7 +25,6 @@ import type { TaskSourceContext } from '../../../../shared/task-source-context'
 import type { WorktreeForceDeleteReason } from '../../../../shared/worktree-removal'
 import type { TerminalGitHubPRLink } from '../../../../shared/terminal-github-pr-link-detector'
 import type { ExecutionHostId } from '../../../../shared/execution-host'
-import type { PreservedBranchCleanup } from '../../../../shared/preserved-branch-cleanup'
 import type {
   HostQualifiedDetectedWorktreeResult,
   SshExecutionHostId
@@ -259,7 +258,6 @@ export type WorktreeSlice = {
       runtimeEnvironmentId?: string
     }
   ) => Promise<({ ok: true } & ForceDeleteWorktreeBranchResult) | { ok: false; error: string }>
-  releasePreservedBranchCleanups: (cleanups: readonly PreservedBranchCleanup[]) => Promise<void>
   clearWorktreeDeleteState: (worktreeId: string) => void
   /** Never rejects — most callers fire-and-forget. Callers that own a surface
    *  the user is waiting on should read the result and say what went wrong. */
