@@ -50,7 +50,13 @@ function googleSignInToastOptions(profileId: string): GoogleSignInToastOptions {
     duration: GOOGLE_NOTICE_DURATION_MS
   }
   if (!useAppStore.getState().activeWorktreeId) {
-    return options
+    return {
+      ...options,
+      description: translate(
+        'auto.lib.browser.cookie.import.toast.googleSkippedWithoutActiveWorktree',
+        'Open a browser in Orca with this profile, then sign into Google.'
+      )
+    }
   }
   return {
     ...options,

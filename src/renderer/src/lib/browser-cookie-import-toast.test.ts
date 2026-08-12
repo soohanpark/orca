@@ -209,6 +209,9 @@ describe('emitBrowserCookieImportToast', () => {
     )
 
     expect(successToastMock).toHaveBeenCalledTimes(1)
+    expect(successToastMock.mock.calls[0][1].description).toBe(
+      'Open a browser in Orca with this profile, then sign into Google.'
+    )
     expect(successToastMock.mock.calls[0][1].action).toBeUndefined()
     expect(openBrowserProfileTabInActiveWorkspace).not.toHaveBeenCalled()
   })
