@@ -56,6 +56,14 @@ export function showPreservedBranchBatchToast(
   }
   const actionableCount = branches.filter((branch) => branch.expectedHead).length
   const toastId = `preserved-branch-batch:${branches[0].worktreeId}:${branches.length}`
+  let reviewOpened = false
+  let reviewCompleted = false
+  const completeReview = (): void => {
+    if (!reviewOpened && !reviewCompleted) {
+      reviewCompleted = true
+      void useAppStore.getState().releasePreservedBranchCleanups(branches)
+    }
+  }
   const removedWorkspaces = translate(
     'auto.components.sidebar.preserved.branch.batch.toast.cea24c2b7d',
     '{{count}} workspaces removed',
@@ -67,6 +75,7 @@ export function showPreservedBranchBatchToast(
     { count: branches.length }
   )
   const onReview = (): void => {
+    reviewOpened = true
     useAppStore.getState().openModal('preserved-branch-review', { branches })
     toast.dismiss(toastId)
   }
@@ -81,6 +90,8 @@ export function showPreservedBranchBatchToast(
       id: toastId,
       description: <PreservedBranchBatchToastBody branches={branches} onReview={onReview} />,
       dismissible: true,
+      onDismiss: completeReview,
+      onAutoClose: completeReview,
       ...(actionableCount > 0 ? { duration: Infinity } : {})
     }
   )
@@ -152,6 +163,7 @@ export async function forceDeletePreservedBranchBatch(
     .filter(Boolean)
     .join('; ')
   const failedBranches = failures.map(({ branch }) => branch)
+  let retryStarted = false
   toast.error(
     translate(
       'auto.components.sidebar.preserved.branch.batch.toast.43d9395605',
@@ -171,6 +183,7 @@ export async function forceDeletePreservedBranchBatch(
             size="sm"
             className="w-full"
             onClick={() => {
+              retryStarted = true
               void forceDeletePreservedBranchBatch(failedBranches)
             }}
           >
@@ -184,7 +197,12 @@ export async function forceDeletePreservedBranchBatch(
         </div>
       ),
       duration: Infinity,
-      dismissible: true
+      dismissible: true,
+      onDismiss: () => {
+        if (!retryStarted) {
+          void useAppStore.getState().releasePreservedBranchCleanups(failedBranches)
+        }
+      }
     }
   )
 }

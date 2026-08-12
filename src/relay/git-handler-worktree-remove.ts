@@ -83,40 +83,6 @@ async function listRelayWorktreesForRemoval(
   }
 }
 
-export type RelayWorktreeRemovalTarget = {
-  repoPath: string
-  worktree: Awaited<ReturnType<typeof listRelayWorktreesForRemoval>>[number] | undefined
-}
-
-export async function resolveRelayWorktreeRemovalTarget(
-  git: GitExec,
-  params: Record<string, unknown>,
-  capabilities: GitCapabilityCache
-): Promise<RelayWorktreeRemovalTarget> {
-  const worktreePath = params.worktreePath as string
-  let listedWorktreePath = worktreePath
-  let repoPath = worktreePath
-  try {
-    const { stdout } = await git(['rev-parse', '--show-toplevel', '--git-common-dir'], worktreePath)
-    const [topLevel = '', commonDir = ''] = stdout.trim().split(/\r?\n/)
-    if (topLevel) {
-      listedWorktreePath = topLevel
-    }
-    if (commonDir && commonDir !== '.git') {
-      repoPath = resolveRelayRepoPath(worktreePath, commonDir)
-    }
-  } catch {
-    // fall through with worktreePath as repo
-  }
-  const worktrees = await listRelayWorktreesForRemoval(git, repoPath, capabilities)
-  return {
-    repoPath,
-    worktree: worktrees.find((worktree) =>
-      areRelayWorktreePathsEqual(worktree.path, listedWorktreePath)
-    )
-  }
-}
-
 async function deleteRelayBranchAfterWorktreeRemoval(
   git: GitExec,
   repoPath: string,
@@ -161,22 +127,26 @@ export async function removeWorktreeOp(
   params: Record<string, unknown>,
   capabilities: GitCapabilityCache
 ): Promise<RemoveWorktreeResult> {
-  const target = await resolveRelayWorktreeRemovalTarget(git, params, capabilities)
-  return removeResolvedWorktreeOp(git, params, capabilities, target)
-}
-
-export async function removeResolvedWorktreeOp(
-  git: GitExec,
-  params: Record<string, unknown>,
-  capabilities: GitCapabilityCache,
-  target: RelayWorktreeRemovalTarget
-): Promise<RemoveWorktreeResult> {
   const worktreePath = params.worktreePath as string
   const force = params.force as boolean | undefined
   const deleteBranch = params.deleteBranch !== false
   const forceBranchDelete = params.forceBranchDelete === true
 
-  const { repoPath, worktree: removedWorktree } = target
+  let repoPath = worktreePath
+  try {
+    const { stdout } = await git(['rev-parse', '--git-common-dir'], worktreePath)
+    const commonDir = stdout.trim()
+    if (commonDir && commonDir !== '.git') {
+      repoPath = resolveRelayRepoPath(worktreePath, commonDir)
+    }
+  } catch {
+    // fall through with worktreePath as repo
+  }
+
+  const worktreesBeforeRemoval = await listRelayWorktreesForRemoval(git, repoPath, capabilities)
+  const removedWorktree = worktreesBeforeRemoval.find((worktree) =>
+    areRelayWorktreePathsEqual(worktree.path, worktreePath)
+  )
   const branchName = normalizeLocalBranchRef(removedWorktree?.branch ?? '')
   const branchHead = removedWorktree?.head ?? ''
 
