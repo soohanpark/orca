@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { emitBrowserCookieImportToast } from '@/lib/browser-cookie-import-toast'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
+import { BrowserCookieImportDisclosure } from '../BrowserCookieImportDisclosure'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -206,6 +207,7 @@ export function BrowserUseCookieImportStep({
             <DropdownMenuItem onSelect={() => void handleImportFromFile()}>
               {translate('auto.components.settings.BrowserUsePane.be6df68384', 'From File…')}
             </DropdownMenuItem>
+            <BrowserCookieImportDisclosure />
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

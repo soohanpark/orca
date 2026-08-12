@@ -3,6 +3,7 @@ import { Import } from 'lucide-react'
 import { toast } from 'sonner'
 import { emitBrowserCookieImportToast } from '@/lib/browser-cookie-import-toast'
 import { Button } from '@/components/ui/button'
+import { BrowserCookieImportDisclosure } from '@/components/BrowserCookieImportDisclosure'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -259,6 +260,7 @@ export function BrowserImportHintButton({
                     'From File…'
                   )}
                 </DropdownMenuItem>
+                <BrowserCookieImportDisclosure />
               </DropdownMenuContent>
             </DropdownMenu>
 

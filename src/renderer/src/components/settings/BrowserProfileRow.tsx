@@ -7,7 +7,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuPortal,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -15,6 +14,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
+import { BrowserCookieImportDisclosure } from '../BrowserCookieImportDisclosure'
 import { useAppStore } from '../../store'
 import { BROWSER_FAMILY_LABELS } from '../../../../shared/constants'
 import { translate } from '@/i18n/i18n'
@@ -174,12 +174,6 @@ export function BrowserProfileRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel className="font-normal">
-              {translate(
-                'auto.components.settings.BrowserProfileRow.654a0c2073',
-                'Google requires signing in directly - imports skip it.'
-              )}
-            </DropdownMenuLabel>
             {detectedBrowsers.map((browser) =>
               browser.profiles.length > 1 ? (
                 <DropdownMenuSub key={browser.family}>
@@ -222,6 +216,7 @@ export function BrowserProfileRow({
             <DropdownMenuItem onSelect={() => void handleImportFromFile()}>
               {translate('auto.components.settings.BrowserProfileRow.ebb78dfd6f', 'From File…')}
             </DropdownMenuItem>
+            <BrowserCookieImportDisclosure />
           </DropdownMenuContent>
         </DropdownMenu>
         {isDefault ? (
