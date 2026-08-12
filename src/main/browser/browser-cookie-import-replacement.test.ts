@@ -100,7 +100,7 @@ describe('validated cookie replacement', () => {
       importedCookies: 0,
       skippedCookies: 1,
       domains: [],
-      googleCookiesPresent: true
+      googleCookiesSkipped: true
     })
     expect(cookiesGetMock).not.toHaveBeenCalled()
     expect(cookiesRemoveMock).not.toHaveBeenCalled()
@@ -248,7 +248,7 @@ describe('native Chromium integrity-cookie accounting', () => {
         importedCookies: 0,
         skippedCookies: 3,
         domains: [],
-        googleCookiesPresent: true
+        googleCookiesSkipped: true
       })
       expect(clearStorageDataMock).not.toHaveBeenCalled()
       expect(cookiesSetMock).not.toHaveBeenCalled()

@@ -28,28 +28,32 @@ function formatCookieImportWarning(warning: CookieImportWarning): string {
 const GOOGLE_SIGN_IN_URL = 'https://accounts.google.com/'
 const GOOGLE_NOTICE_DURATION_MS = 12000
 
+type GoogleSignInToastOptions = {
+  description: string
+  duration: number
+  action?: { label: string; onClick: () => void }
+}
+
 function signInTabUnavailableMessage(): string {
   return translate(
     'auto.lib.browser.cookie.import.toast.googleDirectSignInUnavailable',
-    'Could not open a browser tab. Open one and sign in at accounts.google.com to keep your Google session.'
+    'Could not open the browser profile. Open it and sign in at accounts.google.com.'
   )
 }
 
-// Why: Google binds sessions server-side to the source browser, so imported Google cookies sign out within ~1h (STA-3811); a one-time direct sign-in is the only path that sticks.
-function emitGoogleDirectSignInNotice(profileId: string): void {
-  const message = translate(
-    'auto.lib.browser.cookie.import.toast.googleDirectSignIn',
-    "Google can't stay signed in with imported cookies. Sign in once in a browser tab to keep your Google session."
-  )
-
-  // Why: the action needs an active worktree to host the tab; offering it without one is a button that silently does nothing.
-  if (!useAppStore.getState().activeWorktreeId) {
-    toast.info(message, { duration: GOOGLE_NOTICE_DURATION_MS })
-    return
+function googleSignInToastOptions(profileId: string): GoogleSignInToastOptions {
+  const options: GoogleSignInToastOptions = {
+    description: translate(
+      'auto.lib.browser.cookie.import.toast.googleSkipped',
+      "Google wasn't imported. Sign in directly to use Google in this profile."
+    ),
+    duration: GOOGLE_NOTICE_DURATION_MS
   }
-
-  toast.info(message, {
-    duration: GOOGLE_NOTICE_DURATION_MS,
+  if (!useAppStore.getState().activeWorktreeId) {
+    return options
+  }
+  return {
+    ...options,
     action: {
       label: translate(
         'auto.lib.browser.cookie.import.toast.googleDirectSignInAction',
@@ -72,7 +76,7 @@ function emitGoogleDirectSignInNotice(profileId: string): void {
           })
       }
     }
-  })
+  }
 }
 
 // Why: a degraded import returns ok:true with a warning, so every call site must route it to a
@@ -83,12 +87,21 @@ export function emitBrowserCookieImportToast(
   profileId: string
 ): void {
   const warning = summary.warning
+  const googleOptions = summary.googleCookiesSkipped
+    ? googleSignInToastOptions(profileId)
+    : undefined
   if (warning) {
-    toast.warning(formatCookieImportWarning(warning))
+    const message = formatCookieImportWarning(warning)
+    if (googleOptions) {
+      toast.warning(message, googleOptions)
+    } else {
+      toast.warning(message)
+    }
   } else {
-    toast.success(successMessage)
-  }
-  if (summary.googleCookiesPresent) {
-    emitGoogleDirectSignInNotice(profileId)
+    if (googleOptions) {
+      toast.success(successMessage, googleOptions)
+    } else {
+      toast.success(successMessage)
+    }
   }
 }

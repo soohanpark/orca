@@ -230,17 +230,17 @@ describe('importCookiesFromFile', () => {
     expect(firstCall.sameSite).toBe('lax')
   })
 
-  it('flags Google cookies present in the source snapshot', async () => {
+  it('reports when Google cookies were skipped', async () => {
     const withGoogle = await importCookiesFromFile(
       writeCookieFile([
-        { domain: '.google.com', name: '', value: 'invalid', secure: true },
+        { domain: '.google.com', name: 'SID', value: 'google', secure: true },
         { domain: '.example.com', name: 'test', value: 'val' }
       ]),
       'persist:test'
     )
     expect(withGoogle.ok).toBe(true)
     if (withGoogle.ok) {
-      expect(withGoogle.summary.googleCookiesPresent).toBe(true)
+      expect(withGoogle.summary.googleCookiesSkipped).toBe(true)
       expect(withGoogle.summary.domains).toEqual(['example.com'])
     }
 
@@ -250,7 +250,7 @@ describe('importCookiesFromFile', () => {
     )
     expect(withoutGoogle.ok).toBe(true)
     if (withoutGoogle.ok) {
-      expect(withoutGoogle.summary.googleCookiesPresent).toBe(false)
+      expect(withoutGoogle.summary.googleCookiesSkipped).toBe(false)
     }
   })
 
@@ -547,10 +547,9 @@ describe('importCookiesFromBrowser Chromium', () => {
     }
   })
 
-  it('flags Google cookies present in the Chromium source even when integrity-skipped', async () => {
+  it('reports Google integrity cookies skipped from a Chromium source', async () => {
     const sourceCookiesPath = join(tmpDir, 'Chrome', 'Default', 'Network', 'Cookies')
     const targetCookiesPath = join(tmpDir, 'userData', 'Partitions', 'test', 'Network', 'Cookies')
-    // Why: SIDCC is source-bound and never imported — the flag must still report its presence in the snapshot.
     createChromiumCookieTestDatabase(sourceCookiesPath, [
       { domain: '.google.com', name: 'SIDCC', value: 'bound' },
       { name: 'sid', value: 'source-value' }
@@ -561,12 +560,12 @@ describe('importCookiesFromBrowser Chromium', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.summary.googleCookiesPresent).toBe(true)
+      expect(result.summary.googleCookiesSkipped).toBe(true)
       expect(result.summary.domains).not.toContain('google.com')
     }
   })
 
-  it('reports no Google cookies for a Google-free Chromium source', async () => {
+  it('reports no skipped Google cookies for a Google-free Chromium source', async () => {
     const sourceCookiesPath = join(tmpDir, 'Chrome', 'Default', 'Network', 'Cookies')
     const targetCookiesPath = join(tmpDir, 'userData', 'Partitions', 'test', 'Network', 'Cookies')
     createChromiumCookieTestDatabase(sourceCookiesPath, [
@@ -578,7 +577,7 @@ describe('importCookiesFromBrowser Chromium', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.summary.googleCookiesPresent).toBe(false)
+      expect(result.summary.googleCookiesSkipped).toBe(false)
     }
   })
 

@@ -75,7 +75,6 @@ import type {
 } from '../../shared/types'
 import { browserSessionRegistry } from './browser-session-registry'
 import {
-  isGoogleSessionDomain,
   isGoogleSourceBoundCookie,
   isNonTransplantableCookieDomain,
   NON_TRANSPLANTABLE_HOST_KEY_SQL,
@@ -564,8 +563,7 @@ async function importValidatedCookies(
   cookies: ValidatedCookie[],
   totalInput: number,
   targetPartition: string,
-  mode: CookieImportMode,
-  googleCookiesPresent: boolean
+  mode: CookieImportMode
 ): Promise<BrowserCookieImportResult> {
   const importDomainCache = new Map<string, boolean>()
   const validDomainCookies = cookies.filter((cookie) => {
@@ -696,7 +694,7 @@ async function importValidatedCookies(
     importedCookies: importedCount,
     skippedCookies: skipped,
     domains: [...domainSet].sort(),
-    googleCookiesPresent
+    googleCookiesSkipped: integritySkipped + nonTransplantableSkipped > 0
   }
 
   return { ok: true, profileId: '', summary }
@@ -754,17 +752,12 @@ export async function importCookiesFromFile(
 
   const validated: ValidatedCookie[] = []
   let skipped = 0
-  let googleCookiesPresent = false
   for (const entry of parsed) {
     if (typeof entry !== 'object' || entry === null) {
       skipped++
       continue
     }
-    const rawCookie = entry as RawCookieEntry
-    if (typeof rawCookie.domain === 'string' && isGoogleSessionDomain(rawCookie.domain)) {
-      googleCookiesPresent = true
-    }
-    const cookie = validateCookieEntry(rawCookie)
+    const cookie = validateCookieEntry(entry as RawCookieEntry)
     if (cookie) {
       validated.push(cookie)
     } else {
@@ -783,8 +776,7 @@ export async function importCookiesFromFile(
     validated,
     parsed.length,
     targetPartition,
-    'replace-imported-domains',
-    googleCookiesPresent
+    'replace-imported-domains'
   )
 }
 
@@ -1333,15 +1325,7 @@ async function importCookiesFromFirefox(
 
     const now = Math.floor(Date.now() / 1000)
     const validated: ValidatedCookie[] = []
-    let googleCookiesPresent = false
     for (const row of rows) {
-      if (
-        !googleCookiesPresent &&
-        typeof row.host === 'string' &&
-        isGoogleSessionDomain(row.host)
-      ) {
-        googleCookiesPresent = true
-      }
       if (!row.name || !row.host) {
         continue
       }
@@ -1379,8 +1363,7 @@ async function importCookiesFromFirefox(
       validated,
       rows.length,
       targetPartition,
-      'replace-imported-domains',
-      googleCookiesPresent
+      'replace-imported-domains'
     )
   } catch (err) {
     rmSync(tmpDir, { recursive: true, force: true })
@@ -1429,13 +1412,7 @@ async function importCookiesFromSafari(
     }
 
     const now = Math.floor(Date.now() / 1000)
-    let googleCookiesPresent = false
-    const valid = cookies.filter((cookie) => {
-      if (!googleCookiesPresent && isGoogleSessionDomain(cookie.domain)) {
-        googleCookiesPresent = true
-      }
-      return !cookie.expirationDate || cookie.expirationDate > now
-    })
+    const valid = cookies.filter((cookie) => !cookie.expirationDate || cookie.expirationDate > now)
 
     if (valid.length === 0) {
       return { ok: false, reason: 'All Safari cookies are expired.' }
@@ -1445,8 +1422,7 @@ async function importCookiesFromSafari(
       valid,
       cookies.length,
       targetPartition,
-      'replace-imported-domains',
-      googleCookiesPresent
+      'replace-imported-domains'
     )
   } catch (err) {
     diag(`  Safari import failed: ${String(err)}`)
@@ -1613,16 +1589,8 @@ export async function importCookiesFromBrowser(
       return { ok: false, reason: `No cookies found in ${browser.label}.` }
     }
 
-    let googleCookiesPresent = false
     let needsSourceKey = false
     for (const sourceRow of sourceRows) {
-      if (
-        !googleCookiesPresent &&
-        typeof sourceRow.host_key === 'string' &&
-        isGoogleSessionDomain(sourceRow.host_key)
-      ) {
-        googleCookiesPresent = true
-      }
       const encRaw = sourceRow.encrypted_value
       if (encRaw instanceof Uint8Array && encRaw.length > 0) {
         needsSourceKey = true
@@ -1788,7 +1756,7 @@ export async function importCookiesFromBrowser(
           importedCookies: 0,
           skippedCookies: skipped + integritySkipped + nonTransplantableSkipped,
           domains: [],
-          googleCookiesPresent
+          googleCookiesSkipped: integritySkipped + nonTransplantableSkipped > 0
         }
       }
     }
@@ -1880,7 +1848,7 @@ export async function importCookiesFromBrowser(
       importedCookies: imported,
       skippedCookies: skipped + integritySkipped + nonTransplantableSkipped,
       domains: [...domainSet].sort(),
-      googleCookiesPresent,
+      googleCookiesSkipped: integritySkipped + nonTransplantableSkipped > 0,
       ...(warning ? { warning } : {})
     }
 

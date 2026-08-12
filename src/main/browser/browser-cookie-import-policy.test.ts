@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import type { Cookie } from 'electron'
 import {
-  isGoogleSessionDomain,
   isGoogleSourceBoundCookie,
   isNonTransplantableCookieDomain,
   NON_TRANSPLANTABLE_HOST_KEY_SQL,
@@ -44,17 +43,6 @@ describe('isGoogleSourceBoundCookie', () => {
     expect(normalizeCookieDomain('example.com:443')).toBeNull()
     expect(normalizeCookieDomain('%65xample.com')).toBeNull()
     expect(isGoogleSourceBoundCookie('SIDCC', 'user@google.com')).toBe(false)
-  })
-})
-
-describe('isGoogleSessionDomain', () => {
-  it('matches google.com and its subdomains regardless of cookie name', () => {
-    expect(isGoogleSessionDomain('.google.com')).toBe(true)
-    expect(isGoogleSessionDomain('accounts.google.com')).toBe(true)
-    expect(isGoogleSessionDomain('..Accounts.Google.Com')).toBe(true)
-    expect(isGoogleSessionDomain('.notgoogle.com')).toBe(false)
-    expect(isGoogleSessionDomain('.google.com.evil.example')).toBe(false)
-    expect(isGoogleSessionDomain('user@google.com')).toBe(false)
   })
 })
 
