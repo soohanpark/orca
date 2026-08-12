@@ -17,8 +17,10 @@ function setSnapshot(next: boolean): void {
   }
 }
 
-function handleDragStart(event: DragEvent): void {
-  setSnapshot(Boolean(event.dataTransfer && hasWorkspaceFileDragTypes(event.dataTransfer)))
+function armIfWorkspaceFileDrag(event: DragEvent): void {
+  if (event.dataTransfer && hasWorkspaceFileDragTypes(event.dataTransfer)) {
+    setSnapshot(true)
+  }
 }
 
 function handleDragFinish(): void {
@@ -32,13 +34,17 @@ export function getWorkspaceFileDragActiveSnapshot(): boolean {
 export function subscribeToWorkspaceFileDragActivity(onChange: () => void): () => void {
   subscribers.add(onChange)
   if (!detachWindowListeners && typeof window !== 'undefined') {
-    // Why: capture so a stopPropagation inside the explorer row can't hide the
-    // gesture from panes that need to arm their drop zones.
-    window.addEventListener('dragstart', handleDragStart, true)
+    // Why: React delegates onDragStart to the root, so setData has not run yet
+    // during capture — read the payload on the way back up instead.
+    window.addEventListener('dragstart', armIfWorkspaceFileDrag)
+    // Why: backstop for a source that stops dragstart short of window; by the
+    // first dragenter the payload is always readable.
+    window.addEventListener('dragenter', armIfWorkspaceFileDrag, true)
     window.addEventListener('dragend', handleDragFinish, true)
     window.addEventListener('drop', handleDragFinish, true)
     detachWindowListeners = () => {
-      window.removeEventListener('dragstart', handleDragStart, true)
+      window.removeEventListener('dragstart', armIfWorkspaceFileDrag)
+      window.removeEventListener('dragenter', armIfWorkspaceFileDrag, true)
       window.removeEventListener('dragend', handleDragFinish, true)
       window.removeEventListener('drop', handleDragFinish, true)
     }

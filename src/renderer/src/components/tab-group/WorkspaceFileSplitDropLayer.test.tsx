@@ -59,6 +59,24 @@ function bands(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>('.pointer-events-auto')]
 }
 
+/**
+ * Mirrors how a real Explorer drag starts: React delegates `onDragStart` to the
+ * root, so `setData` lands on the way back up and the payload is still empty
+ * while capture-phase listeners run.
+ */
+function startExplorerDrag(): void {
+  const source = document.createElement('div')
+  document.body.appendChild(source)
+  const types: string[] = []
+  const populate = (): void => {
+    types.push(WORKSPACE_FILE_PATH_MIME)
+  }
+  document.body.addEventListener('dragstart', populate)
+  source.dispatchEvent(dragEvent('dragstart', types))
+  document.body.removeEventListener('dragstart', populate)
+  source.remove()
+}
+
 describe('WorkspaceFileSplitDropLayer', () => {
   let container: HTMLDivElement
   let root: Root | null = null
@@ -81,10 +99,10 @@ describe('WorkspaceFileSplitDropLayer', () => {
     resetWorkspaceFileDragActivityForTests()
   })
 
-  it('arms one band per split direction once an Explorer drag starts', () => {
+  it('arms one band per split direction from the payload the source sets while bubbling', () => {
     expect(bands(container)).toHaveLength(0)
     act(() => {
-      window.dispatchEvent(dragEvent('dragstart', [WORKSPACE_FILE_PATH_MIME]))
+      startExplorerDrag()
     })
     expect(bands(container)).toHaveLength(4)
   })
@@ -98,7 +116,7 @@ describe('WorkspaceFileSplitDropLayer', () => {
 
   it('disarms when the drag ends without a drop', () => {
     act(() => {
-      window.dispatchEvent(dragEvent('dragstart', [WORKSPACE_FILE_PATH_MIME]))
+      startExplorerDrag()
     })
     act(() => {
       window.dispatchEvent(dragEvent('dragend', [WORKSPACE_FILE_PATH_MIME]))
@@ -108,7 +126,7 @@ describe('WorkspaceFileSplitDropLayer', () => {
 
   it('previews the target half while a band is hovered', () => {
     act(() => {
-      window.dispatchEvent(dragEvent('dragstart', [WORKSPACE_FILE_PATH_MIME]))
+      startExplorerDrag()
     })
     expect(container.querySelector('.tab-drop-overlay')).toBeNull()
     act(() => {
@@ -119,7 +137,7 @@ describe('WorkspaceFileSplitDropLayer', () => {
 
   it('opens the dropped file in a split beside the hovered pane', async () => {
     act(() => {
-      window.dispatchEvent(dragEvent('dragstart', [WORKSPACE_FILE_PATH_MIME]))
+      startExplorerDrag()
     })
     const rightBand = bands(container)[1]
     await act(async () => {
@@ -138,7 +156,7 @@ describe('WorkspaceFileSplitDropLayer', () => {
   it('leaves folder drops alone instead of opening an empty split', async () => {
     statRuntimePathMock.mockResolvedValueOnce({ isDirectory: true, mtime: 0, size: 0 })
     act(() => {
-      window.dispatchEvent(dragEvent('dragstart', [WORKSPACE_FILE_PATH_MIME]))
+      startExplorerDrag()
     })
     await act(async () => {
       bands(container)[0]?.dispatchEvent(dragEvent('drop', [WORKSPACE_FILE_PATH_MIME]))
