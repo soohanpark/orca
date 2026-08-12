@@ -6,10 +6,7 @@ import {
   statRuntimePath,
   type RuntimeFileOperationArgs
 } from '@/runtime/runtime-file-client'
-import {
-  createWebRuntimeSessionBrowserTab,
-  isWebRuntimeSessionActive
-} from '@/runtime/web-runtime-session'
+import { createWebRuntimeSessionBrowserTab } from '@/runtime/web-runtime-session'
 import { useAppStore } from '@/store'
 import type { OpenFile } from '@/store/slices/editor'
 import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
@@ -27,6 +24,11 @@ import {
   isTabEntryAbsolutePathAllowed
 } from './tab-create-entry-local-path'
 import type { TabEntryLocalPlatform } from './tab-create-entry-path-validation'
+import {
+  getClientCreationActionPolicy,
+  type ClientCreationActionAvailability
+} from '@/lib/client-creation-action-policy'
+import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 export {
   classifyTabEntryQuery,
   getTabEntryOptions,
@@ -66,7 +68,6 @@ export type TabEntryOperations = {
   ) => BrowserTabState
   createRuntimePath: typeof createRuntimePath
   createWebRuntimeSessionBrowserTab: typeof createWebRuntimeSessionBrowserTab
-  isWebRuntimeSessionActive: typeof isWebRuntimeSessionActive
   openFile: (
     file: Omit<OpenFile, 'id' | 'isDirty'>,
     options?: { preview?: boolean; targetGroupId?: string }
@@ -83,7 +84,8 @@ type OpenTabEntryWithOperationsArgs = {
   groupId: string
   worktreePath: string
   runtimeContext: RuntimeFileOperationArgs
-  activeRuntimeEnvironmentId: string | null
+  browserRuntimeEnvironmentId: string | null
+  managedBrowserAvailability: ClientCreationActionAvailability
   allowAbsolutePaths: boolean
   localPlatform: TabEntryLocalPlatform
   classification?: TabEntryActionClassification
@@ -153,12 +155,13 @@ async function openExistingFile(args: {
 }
 
 export async function openTabEntryWithOperations({
-  activeRuntimeEnvironmentId,
+  browserRuntimeEnvironmentId,
   allowAbsolutePaths,
   classification: selectedClassification,
   fileList,
   groupId,
   localPlatform,
+  managedBrowserAvailability,
   operations,
   query,
   runtimeContext,
@@ -173,32 +176,30 @@ export async function openTabEntryWithOperations({
   }
 
   if (classification.kind === 'explicit-url' || classification.kind === 'host-url') {
-    const runtimeSessionActive = operations.isWebRuntimeSessionActive(activeRuntimeEnvironmentId)
-    if (runtimeSessionActive) {
+    if (managedBrowserAvailability.state !== 'enabled') {
+      throw new Error(managedBrowserAvailability.reason)
+    }
+    if (managedBrowserAvailability.provider === 'paired-runtime') {
+      if (!browserRuntimeEnvironmentId) {
+        throw new Error('The paired runtime browser provider is unavailable.')
+      }
       const created = await operations.createWebRuntimeSessionBrowserTab({
         worktreeId,
-        environmentId: activeRuntimeEnvironmentId,
+        environmentId: browserRuntimeEnvironmentId,
         url: classification.url,
         targetGroupId: groupId
       })
       if (created) {
         return
       }
-      // Why: headless remote runtimes cannot host browser panes yet; a URL open
-      // should still give the user a usable client-local browser tab.
-      operations.createBrowserTab(worktreeId, classification.url, {
-        activate: true,
-        browserRuntimeEnvironmentId: null,
-        targetGroupId: groupId,
-        title: classification.url
-      })
-    } else {
-      operations.createBrowserTab(worktreeId, classification.url, {
-        activate: true,
-        targetGroupId: groupId,
-        title: classification.url
-      })
+      throw new Error('The paired runtime could not create a managed browser tab.')
     }
+    operations.createBrowserTab(worktreeId, classification.url, {
+      activate: true,
+      browserRuntimeEnvironmentId: browserRuntimeEnvironmentId ? null : undefined,
+      targetGroupId: groupId,
+      title: classification.url
+    })
     return
   }
 
@@ -270,7 +271,10 @@ export async function openTabBarEntry(args: TabCreateEntryArgs): Promise<void> {
     groupId: args.groupId,
     worktreePath: worktree.path,
     runtimeContext,
-    activeRuntimeEnvironmentId: runtimeContext.settings?.activeRuntimeEnvironmentId?.trim() ?? null,
+    browserRuntimeEnvironmentId: getRuntimeEnvironmentIdForWorktree(state, args.worktreeId),
+    managedBrowserAvailability: getClientCreationActionPolicy(state, args.worktreeId)[
+      'managed-browser'
+    ],
     allowAbsolutePaths,
     localPlatform,
     classification: args.classification,
@@ -278,7 +282,6 @@ export async function openTabBarEntry(args: TabCreateEntryArgs): Promise<void> {
       createBrowserTab: state.createBrowserTab,
       createRuntimePath,
       createWebRuntimeSessionBrowserTab,
-      isWebRuntimeSessionActive,
       openFile: state.openFile,
       statRuntimePath,
       authorizeExternalPath: window.api.fs.authorizeExternalPath,

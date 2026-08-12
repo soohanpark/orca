@@ -13,7 +13,6 @@ describe('openTabEntryWithOperations', () => {
       createBrowserTab: vi.fn() as TabEntryOperations['createBrowserTab'],
       createRuntimePath: vi.fn().mockResolvedValue(undefined),
       createWebRuntimeSessionBrowserTab: vi.fn().mockResolvedValue(true),
-      isWebRuntimeSessionActive: vi.fn().mockReturnValue(false),
       openFile: vi.fn(),
       statRuntimePath: vi.fn().mockResolvedValue({ size: 1, isDirectory: false, mtime: 1 }),
       authorizeExternalPath: vi.fn().mockResolvedValue(undefined),
@@ -32,7 +31,8 @@ describe('openTabEntryWithOperations', () => {
       worktreeId: 'wt-1',
       worktreePath: '/repo'
     },
-    activeRuntimeEnvironmentId: null,
+    browserRuntimeEnvironmentId: null,
+    managedBrowserAvailability: { state: 'enabled', provider: 'local-client' } as const,
     allowAbsolutePaths: true,
     localPlatform: 'posix' as const
   }
@@ -183,14 +183,13 @@ describe('openTabEntryWithOperations', () => {
   })
 
   it('routes paired runtime browser creation through the web session API', async () => {
-    const operations = makeOperations({
-      isWebRuntimeSessionActive: vi.fn().mockReturnValue(true)
-    })
+    const operations = makeOperations()
 
     await openTabEntryWithOperations({
       ...baseArgs,
       query: 'https://example.com',
-      activeRuntimeEnvironmentId: 'runtime-1',
+      browserRuntimeEnvironmentId: 'runtime-1',
+      managedBrowserAvailability: { state: 'enabled', provider: 'paired-runtime' },
       operations
     })
 
@@ -203,31 +202,43 @@ describe('openTabEntryWithOperations', () => {
     expect(operations.createBrowserTab).not.toHaveBeenCalled()
   })
 
-  it('falls back to a local browser tab when paired runtime browser creation fails', async () => {
+  it('uses the desktop client provider when the paired runtime cannot stream browsers', async () => {
     const operations = makeOperations({
-      createWebRuntimeSessionBrowserTab: vi.fn().mockResolvedValue(false),
-      isWebRuntimeSessionActive: vi.fn().mockReturnValue(true)
+      createWebRuntimeSessionBrowserTab: vi.fn().mockResolvedValue(false)
     })
 
     await openTabEntryWithOperations({
       ...baseArgs,
       query: 'https://example.com',
-      activeRuntimeEnvironmentId: 'runtime-1',
+      browserRuntimeEnvironmentId: 'runtime-1',
       operations
     })
 
-    expect(operations.createWebRuntimeSessionBrowserTab).toHaveBeenCalledWith({
-      worktreeId: 'wt-1',
-      environmentId: 'runtime-1',
-      url: 'https://example.com/',
-      targetGroupId: 'group-1'
-    })
+    expect(operations.createWebRuntimeSessionBrowserTab).not.toHaveBeenCalled()
     expect(operations.createBrowserTab).toHaveBeenCalledWith('wt-1', 'https://example.com/', {
       activate: true,
       browserRuntimeEnvironmentId: null,
       targetGroupId: 'group-1',
       title: 'https://example.com/'
     })
+  })
+
+  it('does not substitute a local tab when the selected paired provider fails', async () => {
+    const operations = makeOperations({
+      createWebRuntimeSessionBrowserTab: vi.fn().mockResolvedValue(false)
+    })
+
+    await expect(
+      openTabEntryWithOperations({
+        ...baseArgs,
+        query: 'https://example.com',
+        browserRuntimeEnvironmentId: 'runtime-1',
+        managedBrowserAvailability: { state: 'enabled', provider: 'paired-runtime' },
+        operations
+      })
+    ).rejects.toThrow('The paired runtime could not create a managed browser tab.')
+
+    expect(operations.createBrowserTab).not.toHaveBeenCalled()
   })
 
   it('authorizes and opens absolute local files in the target group', async () => {
